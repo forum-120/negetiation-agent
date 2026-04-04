@@ -1,0 +1,24 @@
+# Maven 编译产物，不需要上传
+target/
+
+# IntelliJ IDEA 配置文件，不需要上传
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# macOS 系统文件
+.DS_Store
+
+# 环境变量文件（含 API Key，绝对不能上传）
+.env
+
+# plan计划
+implementation_plan_simp.md
+step_by_step_guide_simp.md
+
+# Spring Boot 日志
+*.log
+
+# Java 编译文件
+*.class

@@ -1,0 +1,11 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: negotiation-simulator
+
+logging:
+  level:
+    root: INFO
+    com.nego.simulator: INFO
