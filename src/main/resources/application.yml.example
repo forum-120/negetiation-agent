@@ -5,12 +5,12 @@ spring:
   application:
     name: negotiation-simulator
 
-
+# 这里填写你的百炼凭证
 dashscope:
-  api-key:
-  model-name:
+  api-key: your-api-key-here
+  model-name: qwen-max
 
 logging:
   level:
     root: INFO
-    com.nego.simulator: INFO
+    com.nego.simulator: DEBUG

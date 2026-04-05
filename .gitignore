@@ -22,3 +22,6 @@ step_by_step_guide_simp.md
 
 # Java 编译文件
 *.class
+
+# 配置文件（含 API Key，绝对不能上传）
+src/main/resources/application.yml

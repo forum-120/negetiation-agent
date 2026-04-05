@@ -18,13 +18,32 @@
 
     <properties>
         <java.version>17</java.version>
+
     </properties>
 
     <dependencies>
+
+        <!-- ───────────────────────────────────────────
+             Spring Boot 基础依赖
+        ─────────────────────────────────────────── -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
+        <!-- LangChain4j 核心 -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j</artifactId>
+            <version>0.36.2</version>
+        </dependency>
+
+        <!-- LangChain4j DashScope（通义千问）集成 -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-dashscope</artifactId>
+            <version>0.36.2</version>
+        </dependency>
+
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -48,6 +67,9 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+
+
     </dependencies>
 
     <build>
@@ -55,7 +77,17 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <!-- Lombok 只在编译期使用，打包时不需要 -->
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
             </plugin>
         </plugins>
     </build>
+
 </project>
