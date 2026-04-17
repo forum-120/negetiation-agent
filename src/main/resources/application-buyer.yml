@@ -1,0 +1,9 @@
+server:
+  port: 8081
+
+nego:
+  role: buyer
+
+otel:
+  service:
+    name: negotiation-buyer

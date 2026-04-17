@@ -1,0 +1,9 @@
+server:
+  port: 8082
+
+nego:
+  role: seller
+
+otel:
+  service:
+    name: negotiation-seller

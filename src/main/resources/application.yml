@@ -4,13 +4,32 @@ server:
 spring:
   application:
     name: negotiation-simulator
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
 
 
 dashscope:
-  api-key:
-  model-name:
+  api-key: sk-631700c4a0a74cc68b0e8a30e28292be
+  base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model-name: qwen2.5-32b-instruct
 
 logging:
   level:
     root: INFO
     com.nego.simulator: INFO
+    dev.langchain4j: INFO
+
+otel:
+  service:
+    name: negotiation-simulator
+  exporter:
+    otlp:
+      endpoint: http://localhost:4317
+  propagators: tracecontext,baggage
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0

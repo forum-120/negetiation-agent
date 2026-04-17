@@ -3,20 +3,15 @@ package com.nego.simulator.controller;
 
 import com.nego.simulator.model.*;
 import com.nego.simulator.service.NegotiationService;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
 
-/**
- * 谈判控制器
- *
- * 暴露REST API, 供前端调用发起谈判，查询结果
- * 成交返回200，未成交返回402
- */
 @RestController
 @RequestMapping("/api")
+@ConditionalOnProperty(name = "nego.role", havingValue = "orchestrator", matchIfMissing = true)
 public class NegotiationController {
 
 
@@ -49,6 +44,7 @@ public class NegotiationController {
         NegotiationConfig config = NegotiationConfig.builder()
                 .buyerStrategy(request.buyerStrategy)
                 .sellerStrategy(request.sellerStrategy)
+                .ragMode(request.ragMode != null ? request.ragMode : RagMode.NONE)
                 .maxRounds(request.maxRounds)
                 .convergenceThreshold(request.convergenceThreshold)
                 .build();
@@ -68,11 +64,11 @@ public class NegotiationController {
     }
 
     /**
-     * 批量跑4种策略组合
+     * 批量跑 48 组 4 维策略/RAG组合
      */
     @PostMapping("/negotiate/batch")
-    public List<NegotiationResult> batchCompare(@RequestBody BatchRequest request) {
-        return negotiationService.batchCompare((request.serviceId));
+    public List<NegotiationResult> batchCompare() {
+        return negotiationService.batchCompare();
     }
 
     //获取历史记录
@@ -89,6 +85,14 @@ public class NegotiationController {
 
 
     /**
+     * 获取所有的全局异常行为数据，用于大盘数据展示
+     */
+    @GetMapping("/negotiation/anomalies")
+    public ResponseEntity<List<AnomalyRecord>> getAllAnomalies() {
+        return ResponseEntity.ok(negotiationService.getAllAnomalies());
+    }
+
+    /**
      * 请求体内部类
      */
 
@@ -98,13 +102,13 @@ public class NegotiationController {
         public String serviceId;
         public BuyerStrategy buyerStrategy;
         public SellerStrategy sellerStrategy;
+        public RagMode ragMode;
         public Integer maxRounds;
-        public double convergenceThreshold;
-    }
-
-    //批量对比请求体
-    static class BatchRequest {
-        public String serviceId;
+        // 使用 Double（装箱类型）而非 double（基本类型）：
+        // 当 JSON 不传此字段时，Jackson 会将其反序列化为 null，
+        // NegotiationService 才能正确走默认值 0.03。
+        // 若用 double，不传时默认 0.0，收敛检查实际变成"价格完全相等才收敛"。
+        public Double convergenceThreshold;
     }
 
 
