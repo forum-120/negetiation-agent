@@ -15,6 +15,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.lang.reflect.Proxy;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
@@ -49,8 +50,29 @@ public class SellerA2aServerConfig {
                                                 PushNotificationConfigStore sellerPushConfigStore,
                                                 PushNotificationSender sellerPushSender) {
         Executor executor = Executors.newCachedThreadPool();
-        return DefaultRequestHandler.create(
+        DefaultRequestHandler impl = new DefaultRequestHandler(
                 sellerAgentExecutor, (TaskStore) sellerTaskStore, sellerQueueManager,
                 sellerPushConfigStore, sellerPushSender, executor);
+        setTimeoutFields(impl);
+        return (RequestHandler) Proxy.newProxyInstance(
+                RequestHandler.class.getClassLoader(),
+                new Class[]{RequestHandler.class},
+                (proxy, method, args) -> method.invoke(impl, args));
+    }
+
+    private void setTimeoutFields(DefaultRequestHandler handler) {
+        try {
+            java.lang.reflect.Field agentTimeout = DefaultRequestHandler.class
+                    .getDeclaredField("agentCompletionTimeoutSeconds");
+            agentTimeout.setAccessible(true);
+            agentTimeout.set(handler, 90);
+
+            java.lang.reflect.Field consumptionTimeout = DefaultRequestHandler.class
+                    .getDeclaredField("consumptionCompletionTimeoutSeconds");
+            consumptionTimeout.setAccessible(true);
+            consumptionTimeout.set(handler, 10);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to set DefaultRequestHandler timeout fields", e);
+        }
     }
 }

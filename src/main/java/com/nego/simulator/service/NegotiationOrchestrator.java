@@ -3,6 +3,7 @@ package com.nego.simulator.service;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import com.nego.simulator.model.*;
 import io.opentelemetry.api.trace.Span;
@@ -18,8 +19,9 @@ public class NegotiationOrchestrator {
     private final StrategyKnowledgeService strategyKnowledgeService;
     private final Tracer tracer;
 
-    public NegotiationOrchestrator(StrategyKnowledgeService strategyKnowledgeService,
-                                   Tracer tracer) {
+    public NegotiationOrchestrator(
+            @org.springframework.beans.factory.annotation.Autowired(required = false) StrategyKnowledgeService strategyKnowledgeService,
+            Tracer tracer) {
         this.strategyKnowledgeService = strategyKnowledgeService;
         this.tracer = tracer;
     }
@@ -61,7 +63,7 @@ public class NegotiationOrchestrator {
 
                 String buyerRagQuery = null;
                 String buyerRagContext = null;
-                if (config.getRagMode() == RagMode.BOTH || config.getRagMode() == RagMode.BUYER_ONLY) {
+                if (strategyKnowledgeService != null && (config.getRagMode() == RagMode.BOTH || config.getRagMode() == RagMode.BUYER_ONLY)) {
                     String situation = String.format(
                             "作为买方，第%d轮谈判，对方上一轮出价$%.2f，我方上一轮出价$%.2f，商品要价$%.2f",
                             round, sellerPrice, buyerPrice, service.getAskingPrice());
@@ -83,7 +85,14 @@ public class NegotiationOrchestrator {
                         .setAttribute("round", round).startSpan();
                 OfferResponse buyerOffer;
                 try (Scope sc = buyerCallSpan.makeCurrent()) {
-                    buyerOffer = transport.sendToBuyer(buyerContext).join();
+                    try {
+                        buyerOffer = transport.sendToBuyer(buyerContext).get(90, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException("Buyer agent call interrupted", e);
+                    } catch (Exception e) {
+                        throw new RuntimeException("Buyer agent call failed or timed out", e);
+                    }
                 } finally {
                     buyerCallSpan.end();
                 }
@@ -108,7 +117,7 @@ public class NegotiationOrchestrator {
 
                 String sellerRagQuery = null;
                 String sellerRagContext = null;
-                if (config.getRagMode() == RagMode.BOTH || config.getRagMode() == RagMode.SELLER_ONLY) {
+                if (strategyKnowledgeService != null && (config.getRagMode() == RagMode.BOTH || config.getRagMode() == RagMode.SELLER_ONLY)) {
                     String situation = String.format(
                             "作为卖方，第%d轮谈判，对方上一轮出价$%.2f，我方上一轮报价$%.2f，商品要价$%.2f",
                             round, buyerPrice, sellerPrice, service.getAskingPrice());
@@ -129,7 +138,14 @@ public class NegotiationOrchestrator {
                         .setAttribute("round", round).startSpan();
                 OfferResponse sellerOffer;
                 try (Scope sc = sellerCallSpan.makeCurrent()) {
-                    sellerOffer = transport.sendToSeller(sellerContext).join();
+                    try {
+                        sellerOffer = transport.sendToSeller(sellerContext).get(90, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException("Seller agent call interrupted", e);
+                    } catch (Exception e) {
+                        throw new RuntimeException("Seller agent call failed or timed out", e);
+                    }
                 } finally {
                     sellerCallSpan.end();
                 }

@@ -27,6 +27,7 @@ otel:
   exporter:
     otlp:
       endpoint: http://localhost:4317
+      protocol: grpc
   propagators: tracecontext,baggage
 
 management:

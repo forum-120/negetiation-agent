@@ -3,17 +3,16 @@ package com.nego.simulator.a2a;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import io.a2a.server.ServerCallContext;
+import io.a2a.server.auth.UnauthenticatedUser;
 import io.a2a.server.requesthandlers.RequestHandler;
 import io.a2a.spec.AgentCard;
 import io.a2a.spec.EventKind;
 import io.a2a.spec.JSONRPCError;
 import io.a2a.spec.MessageSendParams;
-import io.a2a.server.ServerCallContext;
-import io.a2a.server.auth.UnauthenticatedUser;
 import io.a2a.spec.Task;
-import io.a2a.spec.TaskQueryParams;
 import io.a2a.spec.TaskIdParams;
-import io.a2a.spec.MessageSendParams;
+import io.a2a.spec.TaskQueryParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -39,16 +38,21 @@ public class SellerA2aController {
         this.objectMapper = objectMapper;
     }
 
-    @GetMapping("/.well-known/agent-card.json")
+    @GetMapping({"/.well-known/agent.json", "/.well-known/agent-card.json"})
     public AgentCard getCard() {
         return agentCard;
     }
 
     @PostMapping(value = "/a2a", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> handleJsonRpc(@RequestBody JsonNode body) {
+        // 提前解析 id，确保 catch 块也能拿到正确的请求 id
+        Object id = null;
+        try {
+            id = body.has("id") ? objectMapper.treeToValue(body.get("id"), Object.class) : null;
+        } catch (Exception ignored) {}
+
         try {
             String method = body.has("method") ? body.get("method").asText() : "";
-            Object id = body.has("id") ? objectMapper.treeToValue(body.get("id"), Object.class) : null;
             JsonNode paramsNode = body.has("params") ? body.get("params") : null;
 
             ServerCallContext callContext = new ServerCallContext(
@@ -76,11 +80,11 @@ public class SellerA2aController {
                 }
             }
         } catch (JSONRPCError e) {
-            Object id = body.has("id") ? null : null;
+            // id 已在 try 块外解析，此处正确传递请求 id
             return ResponseEntity.ok(buildErrorResponse(id, e));
         } catch (Exception e) {
             log.error("Error handling A2A JSON-RPC request", e);
-            return ResponseEntity.ok(buildErrorResponse(null,
+            return ResponseEntity.ok(buildErrorResponse(id,
                     new JSONRPCError(-32603, "Internal error: " + e.getMessage(), null)));
         }
     }

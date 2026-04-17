@@ -25,3 +25,5 @@ step_by_step_guide_simp.md
 
 # 配置文件（含 API Key，绝对不能上传）
 src/main/resources/application.yml
+opentelemetry-javaagent.jar
+logs/

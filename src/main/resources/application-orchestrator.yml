@@ -13,3 +13,8 @@ nego:
 otel:
   service:
     name: negotiation-orchestrator
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0

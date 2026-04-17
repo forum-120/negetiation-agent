@@ -3,7 +3,6 @@ package com.nego.simulator.controller;
 
 import com.nego.simulator.model.*;
 import com.nego.simulator.service.NegotiationService;
-import io.a2a.spec.AgentCard;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,21 +16,9 @@ public class NegotiationController {
 
 
     private final NegotiationService negotiationService;
-    private final AgentCard agentCard;
 
-    public NegotiationController(NegotiationService negotiationService, AgentCard agentCard) {
+    public NegotiationController(NegotiationService negotiationService) {
         this.negotiationService = negotiationService;
-        this.agentCard = agentCard;
-    }
-
-    @GetMapping("/.well-known/agent-card.json")
-    public AgentCard getOrchestratorCard() {
-        return agentCard;
-    }
-
-    @GetMapping("/a2a/card")
-    public AgentCard getOrchestratorCardAlt() {
-        return agentCard;
     }
 
     //获取商品列表

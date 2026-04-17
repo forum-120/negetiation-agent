@@ -15,6 +15,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.lang.reflect.Proxy;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
@@ -49,8 +50,32 @@ public class BuyerA2aServerConfig {
                                                PushNotificationConfigStore buyerPushConfigStore,
                                                PushNotificationSender buyerPushSender) {
         Executor executor = Executors.newCachedThreadPool();
-        return DefaultRequestHandler.create(
+        DefaultRequestHandler impl = new DefaultRequestHandler(
                 buyerAgentExecutor, (TaskStore) buyerTaskStore, buyerQueueManager,
                 buyerPushConfigStore, buyerPushSender, executor);
+        // 设置 timeout 字段（字段是 package-private，需要反射）
+        setTimeoutFields(impl);
+        // 用 JDK 动态代理包装：Spring 组可能看到的类型是 RequestHandler 接口，
+        // 而不是 DefaultRequestHandler 本体，就不会扫描其内部的 @jakarta.inject.Inject 字段。
+        return (RequestHandler) Proxy.newProxyInstance(
+                RequestHandler.class.getClassLoader(),
+                new Class[]{RequestHandler.class},
+                (proxy, method, args) -> method.invoke(impl, args));
+    }
+
+    private void setTimeoutFields(DefaultRequestHandler handler) {
+        try {
+            java.lang.reflect.Field agentTimeout = DefaultRequestHandler.class
+                    .getDeclaredField("agentCompletionTimeoutSeconds");
+            agentTimeout.setAccessible(true);
+            agentTimeout.set(handler, 90);
+
+            java.lang.reflect.Field consumptionTimeout = DefaultRequestHandler.class
+                    .getDeclaredField("consumptionCompletionTimeoutSeconds");
+            consumptionTimeout.setAccessible(true);
+            consumptionTimeout.set(handler, 10);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to set DefaultRequestHandler timeout fields", e);
+        }
     }
 }

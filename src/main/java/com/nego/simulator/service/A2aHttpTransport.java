@@ -91,7 +91,7 @@ public class A2aHttpTransport implements AgentTransport {
         Message msg = new Message(
                 Message.Role.USER,
                 List.of(new TextPart(context)),
-                null, null, null,
+                UUID.randomUUID().toString(), null, null,
                 List.of(),
                 metadata,
                 List.of()
@@ -141,7 +141,7 @@ public class A2aHttpTransport implements AgentTransport {
         Message msg = new Message(
                 Message.Role.USER,
                 List.of(new TextPart(context)),
-                null, null, null,
+                UUID.randomUUID().toString(), null, null,
                 List.of(),
                 metadata,
                 List.of()

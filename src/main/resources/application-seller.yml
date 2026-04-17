@@ -7,3 +7,8 @@ nego:
 otel:
   service:
     name: negotiation-seller
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0

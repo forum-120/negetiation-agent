@@ -9,7 +9,12 @@ services:
       SERVER_PORT: "8081"
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_SERVICE_NAME: negotiation-buyer
+      OTEL_LOGS_EXPORTER: none
+      OTEL_METRICS_EXPORTER: none
+      OTEL_TRACES_SAMPLER: always_on
+      NEGO_AGENT_PUBLIC_URL: http://buyer-agent:8081
     depends_on:
       redis: { condition: service_healthy }
     restart: on-failure
@@ -22,7 +27,12 @@ services:
       SERVER_PORT: "8082"
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_SERVICE_NAME: negotiation-seller
+      OTEL_LOGS_EXPORTER: none
+      OTEL_METRICS_EXPORTER: none
+      OTEL_TRACES_SAMPLER: always_on
+      NEGO_AGENT_PUBLIC_URL: http://seller-agent:8082
     depends_on:
       redis: { condition: service_healthy }
     restart: on-failure
@@ -36,8 +46,13 @@ services:
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
       NEGO_AGENT_BUYER_URL: http://buyer-agent:8081
       NEGO_AGENT_SELLER_URL: http://seller-agent:8082
+      NEGO_AGENT_PUBLIC_URL: http://orchestrator:8080
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_SERVICE_NAME: negotiation-orchestrator
+      OTEL_LOGS_EXPORTER: none
+      OTEL_METRICS_EXPORTER: none
+      OTEL_TRACES_SAMPLER: always_on
     depends_on:
       buyer-agent: { condition: service_started }
       seller-agent: { condition: service_started }
