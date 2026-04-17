@@ -65,4 +65,11 @@ public class NegotiationConfig {
      * </ul>
      */
     private Double convergenceThreshold;
+
+    /**
+     * RAG开关/模式。
+     *
+     * <p>决定谁能使用RAG：无、双向、仅买、仅卖。
+     */
+    private RagMode ragMode;
 }

@@ -1,0 +1,61 @@
+version: '3.9'
+services:
+
+  buyer-agent:
+    build: .
+    ports: ["8081:8081"]
+    environment:
+      SPRING_PROFILES_ACTIVE: buyer
+      SERVER_PORT: "8081"
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: negotiation-buyer
+    depends_on:
+      redis: { condition: service_healthy }
+    restart: on-failure
+
+  seller-agent:
+    build: .
+    ports: ["8082:8082"]
+    environment:
+      SPRING_PROFILES_ACTIVE: seller
+      SERVER_PORT: "8082"
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: negotiation-seller
+    depends_on:
+      redis: { condition: service_healthy }
+    restart: on-failure
+
+  orchestrator:
+    build: .
+    ports: ["8080:8080"]
+    environment:
+      SPRING_PROFILES_ACTIVE: orchestrator
+      SERVER_PORT: "8080"
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+      NEGO_AGENT_BUYER_URL: http://buyer-agent:8081
+      NEGO_AGENT_SELLER_URL: http://seller-agent:8082
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: negotiation-orchestrator
+    depends_on:
+      buyer-agent: { condition: service_started }
+      seller-agent: { condition: service_started }
+      redis: { condition: service_healthy }
+      jaeger: { condition: service_started }
+    restart: on-failure
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    ports:
+      - "16686:16686"
+      - "4317:4317"

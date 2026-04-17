@@ -75,7 +75,7 @@ public class NegotiationService {
             double threshold = config.getConvergenceThreshold() != null ? config.getConvergenceThreshold() : 0.03;
 
             // 创建本场谈判独享的 Transport（InProcess 或 Http，由 TransportFactory 决定）
-            try (AgentTransport transport = transportFactory.createTransport(
+            try (AgentTransport transport = transportFactory.create(
                     config.getBuyerStrategy(), config.getSellerStrategy(), service.getAskingPrice())) {
 
                 // 调用 Orchestrator 执行谈判循环

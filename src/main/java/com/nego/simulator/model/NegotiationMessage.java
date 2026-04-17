@@ -101,4 +101,17 @@ public class NegotiationMessage {
      * </ul>
      */
     private LocalDateTime timestamp;
+
+    /**
+     * RAG 对话改写结果 (Query Rewrite)。
+     * 记录供后续分析使用的 DeepSeek 改写状态。
+     */
+    private String ragQuery;
+
+    /**
+     * RAG 返回的核心策略内容。
+     * 记录这轮系统到底喂了什么策略给 Agent。
+     */
+    private String ragContext;
+
 }

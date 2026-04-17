@@ -27,13 +27,16 @@ public class NegotiationOrchestrator {
     /**
      * 执行一场完整的多轮谈判。
      *
-     * @param service    商品信息
-     * @param config     谈判配置（策略、轮数、收敛阈值、RAG 模式）
-     * @param transport  Agent 传输层（同进程 or 跨网络）
-     * @param maxRounds  最大谈判轮数
-     * @param threshold  收敛阈值（价差比例）
-     * @param anomalies  异常记录列表（由调用方传入，本方法负责追加）
-     * @return 谈判结果
+     * <p>每轮流程：
+     * <ol>
+     *   <li>买方回合：设置对手报价 → RAG（可选）→ 调 transport.sendToBuyer() → 判断接受</li>
+     *   <li>卖方回合：镜像执行</li>
+     *   <li>收敛判断：价差比例 ≤ threshold → 取中间价成交</li>
+     * </ol>
+     * </p>
+     *
+     * <p>{@link AgentTransport#sendToBuyer} 返回 {@link java.util.concurrent.CompletableFuture}，
+     * 当前用 {@code .join()} 同步等待。Phase 2 sealed-bid 可改为 {@code allOf} 并发。</p>
      */
     public NegotiationResult run(ServiceInfo service, NegotiationConfig config,
                                   AgentTransport transport,
@@ -46,7 +49,6 @@ public class NegotiationOrchestrator {
 
         for (int round = 1; round <= maxRounds; round++) {
 
-            // ── Per-round span ──
             Span roundSpan = tracer.spanBuilder("negotiation.round")
                     .setAttribute("round", round)
                     .startSpan();
@@ -76,23 +78,25 @@ public class NegotiationOrchestrator {
                     buyerContext += "\n[相关策略]\n" + buyerRagContext;
                 }
 
+                // agent.buyer.call span 覆盖整个 LLM 调用（含网络 + 推理耗时）
                 Span buyerCallSpan = tracer.spanBuilder("agent.buyer.call")
                         .setAttribute("round", round).startSpan();
-                String buyerResponse;
+                OfferResponse buyerOffer;
                 try (Scope sc = buyerCallSpan.makeCurrent()) {
-                    buyerResponse = transport.sendToBuyer(buyerContext);
+                    buyerOffer = transport.sendToBuyer(buyerContext).join();
                 } finally {
                     buyerCallSpan.end();
                 }
-                buyerPrice = transport.getBuyerLastOffer();
+
+                buyerPrice = buyerOffer.getLastOffer();
                 roundSpan.setAttribute("buyer.price", buyerPrice);
 
                 messages.add(NegotiationMessage.builder()
-                        .role("BUYER").content(buyerResponse).price(buyerPrice)
+                        .role("BUYER").content(buyerOffer.getText()).price(buyerPrice)
                         .round(round).ragQuery(buyerRagQuery).ragContext(buyerRagContext)
                         .timestamp(LocalDateTime.now()).build());
 
-                if (transport.isBuyerAccepted()) {
+                if (buyerOffer.isAccepted()) {
                     roundSpan.setAttribute("outcome", "buyer.accepted");
                     return buildResult(true, buyerPrice, service, messages, round, config);
                 }
@@ -123,21 +127,22 @@ public class NegotiationOrchestrator {
 
                 Span sellerCallSpan = tracer.spanBuilder("agent.seller.call")
                         .setAttribute("round", round).startSpan();
-                String sellerResponse;
+                OfferResponse sellerOffer;
                 try (Scope sc = sellerCallSpan.makeCurrent()) {
-                    sellerResponse = transport.sendToSeller(sellerContext);
+                    sellerOffer = transport.sendToSeller(sellerContext).join();
                 } finally {
                     sellerCallSpan.end();
                 }
-                sellerPrice = transport.getSellerLastOffer();
+
+                sellerPrice = sellerOffer.getLastOffer();
                 roundSpan.setAttribute("seller.price", sellerPrice);
 
                 messages.add(NegotiationMessage.builder()
-                        .role("SELLER").content(sellerResponse).price(sellerPrice)
+                        .role("SELLER").content(sellerOffer.getText()).price(sellerPrice)
                         .round(round).ragQuery(sellerRagQuery).ragContext(sellerRagContext)
                         .timestamp(LocalDateTime.now()).build());
 
-                if (transport.isSellerAccepted()) {
+                if (sellerOffer.isAccepted()) {
                     roundSpan.setAttribute("outcome", "seller.accepted");
                     return buildResult(true, sellerPrice, service, messages, round, config);
                 }

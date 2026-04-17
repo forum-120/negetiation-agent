@@ -29,7 +29,7 @@ public class BuyerAgentService {
 
     public AgentInitResponse init(AgentInitRequest request) {
         BuyerStrategy strategy = BuyerStrategy.valueOf(request.getStrategy());
-        BuyerTools tools = new BuyerTools(strategy, request.getAskPrice());
+        BuyerTools tools = new BuyerTools(strategy, request.getAskingPrice());
         BuyerAgent agent = AiServices.builder(BuyerAgent.class)
                 .chatLanguageModel(chatLanguageModel)
                 .tools(tools)
@@ -52,6 +52,10 @@ public class BuyerAgentService {
                 .accepted(session.tools.isAccepted())
                 .violations(session.tools.getViolations())
                 .build();
+    }
+
+    public boolean hasSession(String sessionId) {
+        return sessions.containsKey(sessionId);
     }
 
     public void destroySession(String sessionId) {

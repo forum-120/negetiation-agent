@@ -1,7 +1,7 @@
 package com.nego.simulator.config;
 
 import dev.langchain4j.model.chat.ChatLanguageModel;
-import dev.langchain4j.model.dashscope.QwenChatModel;
+import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,12 +23,16 @@ public class AgentConfig {
     @Value("${dashscope.api-key}")
     private String apiKey;
 
-    @Value("${dashscope.model-name:qwen-max}")
+    @Value("${dashscope.model-name:qwen3.5-plus}")
     private String modelName;
+
+    @Value("${dashscope.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}")
+    private String baseUrl;
 
     @Bean
     public ChatLanguageModel chatLanguageModel() {
-        return QwenChatModel.builder()
+        return OpenAiChatModel.builder()
+                .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .modelName(modelName)
                 .build();

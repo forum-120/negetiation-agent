@@ -6,15 +6,14 @@ import org.springframework.web.client.RestTemplate;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * HttpTransport — AgentTransport 的 HTTP 远程调用实现。
  *
- * <p>
- * 通过 REST 调用远程 Buyer / Seller Agent 服务，
- * 替代 InProcessTransport 的同进程直调。
- * Orchestrator 启动此 Transport 时，按 nego.agent.buyer.url / seller.url 配置连接远端。
- * </p>
+ * <p>通过 REST 调用远程 Buyer / Seller Agent 服务。
+ * 当前实现在调用线程同步等待 HTTP 响应，然后包装成 completedFuture 返回。
+ * Phase 2 如需真正并发，可改用 AsyncRestTemplate 或 WebClient。</p>
  */
 public class HttpTransport implements AgentTransport {
 
@@ -24,10 +23,6 @@ public class HttpTransport implements AgentTransport {
     private final String buyerSessionId;
     private final String sellerSessionId;
 
-    private double buyerLastOffer;
-    private double sellerLastOffer;
-    private boolean buyerAccepted;
-    private boolean sellerAccepted;
     private double opponentOfferForBuyer;
     private double opponentOfferForSeller;
 
@@ -62,7 +57,7 @@ public class HttpTransport implements AgentTransport {
     }
 
     @Override
-    public String sendToBuyer(String context) {
+    public CompletableFuture<OfferResponse> sendToBuyer(String context) {
         AgentCallRequest request = AgentCallRequest.builder()
                 .sessionId(buyerSessionId)
                 .context(context)
@@ -71,16 +66,21 @@ public class HttpTransport implements AgentTransport {
         ResponseEntity<AgentCallResponse> resp = restTemplate.postForEntity(
                 buyerBaseUrl + "/agent/buyer/call", request, AgentCallResponse.class);
         AgentCallResponse body = resp.getBody();
-        this.buyerLastOffer = body.getLastOffer();
-        this.buyerAccepted = body.isAccepted();
+
         if (body.getViolations() != null) {
-            this.buyerViolations.addAll(body.getViolations());
+            buyerViolations.addAll(body.getViolations());
         }
-        return body.getResponse();
+
+        return CompletableFuture.completedFuture(OfferResponse.builder()
+                .text(body.getResponse())
+                .lastOffer(body.getLastOffer())
+                .accepted(body.isAccepted())
+                .violations(body.getViolations())
+                .build());
     }
 
     @Override
-    public String sendToSeller(String context) {
+    public CompletableFuture<OfferResponse> sendToSeller(String context) {
         AgentCallRequest request = AgentCallRequest.builder()
                 .sessionId(sellerSessionId)
                 .context(context)
@@ -89,32 +89,17 @@ public class HttpTransport implements AgentTransport {
         ResponseEntity<AgentCallResponse> resp = restTemplate.postForEntity(
                 sellerBaseUrl + "/agent/seller/call", request, AgentCallResponse.class);
         AgentCallResponse body = resp.getBody();
-        this.sellerLastOffer = body.getLastOffer();
-        this.sellerAccepted = body.isAccepted();
+
         if (body.getViolations() != null) {
-            this.sellerViolations.addAll(body.getViolations());
+            sellerViolations.addAll(body.getViolations());
         }
-        return body.getResponse();
-    }
 
-    @Override
-    public boolean isBuyerAccepted() {
-        return buyerAccepted;
-    }
-
-    @Override
-    public boolean isSellerAccepted() {
-        return sellerAccepted;
-    }
-
-    @Override
-    public double getBuyerLastOffer() {
-        return buyerLastOffer;
-    }
-
-    @Override
-    public double getSellerLastOffer() {
-        return sellerLastOffer;
+        return CompletableFuture.completedFuture(OfferResponse.builder()
+                .text(body.getResponse())
+                .lastOffer(body.getLastOffer())
+                .accepted(body.isAccepted())
+                .violations(body.getViolations())
+                .build());
     }
 
     @Override

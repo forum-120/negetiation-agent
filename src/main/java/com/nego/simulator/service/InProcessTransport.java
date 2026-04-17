@@ -6,22 +6,24 @@ import com.nego.simulator.agent.SellerAgent;
 import com.nego.simulator.agent.SellerTools;
 import com.nego.simulator.model.AnomalyRecord;
 import com.nego.simulator.model.BuyerStrategy;
+import com.nego.simulator.model.OfferResponse;
 import com.nego.simulator.model.SellerStrategy;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.service.AiServices;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * InProcessTransport — AgentTransport 的 JVM 内存实现。
  *
- * <p>
- * 持有 BuyerAgent / SellerAgent 以及对应的有状态 BuyerTools / SellerTools。
- * 调用 sendToBuyer / sendToSeller 时直接在同一进程中调用 LLM，与原来
- * {@code NegotiationService.runNegotiationLoop} 的内联调用行为完全等价。
- * </p>
+ * <p>持有 BuyerAgent / SellerAgent 以及对应的有状态 BuyerTools / SellerTools。
+ * 调用时直接在同一进程中调用 LLM，与原 NegotiationService 内联调用行为完全等价。</p>
  *
- * <p>Phase 1 时此类不变，Orchestrator 只需换用 {@code A2aHttpTransport}。</p>
+ * <p>返回 {@code CompletableFuture.completedFuture()} 满足接口契约，
+ * 同步场景下无额外开销；Phase 2 并发调用时可直接换用异步实现。</p>
+ *
+ * <p>Phase 1 时此类不变，Orchestrator 只需换用 A2aHttpTransport。</p>
  */
 public class InProcessTransport implements AgentTransport {
 
@@ -49,33 +51,25 @@ public class InProcessTransport implements AgentTransport {
     }
 
     @Override
-    public String sendToBuyer(String context) {
-        return buyerAgent.negotiate(context);
+    public CompletableFuture<OfferResponse> sendToBuyer(String context) {
+        String text = buyerAgent.negotiate(context);
+        return CompletableFuture.completedFuture(OfferResponse.builder()
+                .text(text)
+                .lastOffer(buyerTools.getLastOffer())
+                .accepted(buyerTools.isAccepted())
+                .violations(buyerTools.getViolations())
+                .build());
     }
 
     @Override
-    public String sendToSeller(String context) {
-        return sellerAgent.negotiate(context);
-    }
-
-    @Override
-    public boolean isBuyerAccepted() {
-        return buyerTools.isAccepted();
-    }
-
-    @Override
-    public boolean isSellerAccepted() {
-        return sellerTools.isAccepted();
-    }
-
-    @Override
-    public double getBuyerLastOffer() {
-        return buyerTools.getLastOffer();
-    }
-
-    @Override
-    public double getSellerLastOffer() {
-        return sellerTools.getLastOffer();
+    public CompletableFuture<OfferResponse> sendToSeller(String context) {
+        String text = sellerAgent.negotiate(context);
+        return CompletableFuture.completedFuture(OfferResponse.builder()
+                .text(text)
+                .lastOffer(sellerTools.getLastOffer())
+                .accepted(sellerTools.isAccepted())
+                .violations(sellerTools.getViolations())
+                .build());
     }
 
     @Override
@@ -100,6 +94,7 @@ public class InProcessTransport implements AgentTransport {
 
     @Override
     public void close() {
+        // 同进程无外部资源需要释放
     }
 
     public BuyerTools getBuyerTools() {

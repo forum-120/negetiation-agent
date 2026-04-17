@@ -1,0 +1,3032 @@
+diff --git a/.vscode/settings.json b/.vscode/settings.json
+index c5f3f6b..e0f15db 100644
+--- a/.vscode/settings.json
++++ b/.vscode/settings.json
+@@ -1,3 +1,3 @@
+ {
+-    "java.configuration.updateBuildConfiguration": "interactive"
++    "java.configuration.updateBuildConfiguration": "automatic"
+ }
+\ No newline at end of file
+diff --git a/pom.xml b/pom.xml
+index f97ae05..5db88fb 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -18,7 +18,8 @@
+ 
+     <properties>
+         <java.version>17</java.version>
+-
++        <lombok.version>1.18.38</lombok.version>
++        <a2a.sdk.version>0.3.2.Final</a2a.sdk.version>
+     </properties>
+ 
+     <dependencies>
+@@ -44,6 +45,12 @@
+             <version>0.36.2</version>
+         </dependency>
+ 
++        <dependency>
++            <groupId>dev.langchain4j</groupId>
++            <artifactId>langchain4j-open-ai</artifactId>
++            <version>0.36.2</version>
++        </dependency>
++
+ 
+         <dependency>
+             <groupId>org.springframework.boot</groupId>
+@@ -59,6 +66,7 @@
+         <dependency>
+             <groupId>org.projectlombok</groupId>
+             <artifactId>lombok</artifactId>
++            <version>${lombok.version}</version>
+             <optional>true</optional>
+         </dependency>
+ 
+@@ -68,12 +76,80 @@
+             <scope>test</scope>
+         </dependency>
+ 
++        <!-- ───────────────────────────────────────────
++             Redis 持久化
++        ─────────────────────────────────────────── -->
++        <dependency>
++            <groupId>org.springframework.boot</groupId>
++            <artifactId>spring-boot-starter-data-redis</artifactId>
++        </dependency>
++
++        <!-- Jackson LocalDateTime 序列化支持 -->
++        <dependency>
++            <groupId>com.fasterxml.jackson.datatype</groupId>
++            <artifactId>jackson-datatype-jsr310</artifactId>
++        </dependency>
++
++        <!-- LangChain4j Ollama 集成（用于调用本地 Ollama Embedding 模型） -->
++        <dependency>
++          <groupId>dev.langchain4j</groupId>
++           <artifactId>langchain4j-ollama</artifactId>
++           <version>0.36.2</version>
++        </dependency>
++
++        <!-- LangChain4j Milvus 向量存储 -->
++        <dependency>
++            <groupId>dev.langchain4j</groupId>
++            <artifactId>langchain4j-milvus</artifactId>
++             <version>0.36.2</version>
++        </dependency>
++
++        <dependency>
++            <groupId>io.github.a2asdk</groupId>
++            <artifactId>a2a-java-sdk-server-common</artifactId>
++            <version>${a2a.sdk.version}</version>
++        </dependency>
++
++        <dependency>
++            <groupId>io.github.a2asdk</groupId>
++            <artifactId>a2a-java-sdk-client</artifactId>
++            <version>${a2a.sdk.version}</version>
++        </dependency>
++
++        <dependency>
++            <groupId>io.opentelemetry</groupId>
++            <artifactId>opentelemetry-api</artifactId>
++        </dependency>
++
++        <dependency>
++            <groupId>io.opentelemetry.instrumentation</groupId>
++            <artifactId>opentelemetry-spring-boot-starter</artifactId>
++            <version>2.10.0</version>
++        </dependency>
++
++        <dependency>
++            <groupId>io.opentelemetry</groupId>
++            <artifactId>opentelemetry-exporter-otlp</artifactId>
++        </dependency>
+ 
+ 
+     </dependencies>
+ 
+     <build>
+         <plugins>
++            <plugin>
++                <groupId>org.apache.maven.plugins</groupId>
++                <artifactId>maven-compiler-plugin</artifactId>
++                <configuration>
++                    <annotationProcessorPaths>
++                        <path>
++                            <groupId>org.projectlombok</groupId>
++                            <artifactId>lombok</artifactId>
++                            <version>${lombok.version}</version>
++                        </path>
++                    </annotationProcessorPaths>
++                </configuration>
++            </plugin>
+             <plugin>
+                 <groupId>org.springframework.boot</groupId>
+                 <artifactId>spring-boot-maven-plugin</artifactId>
+diff --git a/src/main/java/com/nego/simulator/agent/BuyerTools.java b/src/main/java/com/nego/simulator/agent/BuyerTools.java
+index 4ad8607..bd83d82 100644
+--- a/src/main/java/com/nego/simulator/agent/BuyerTools.java
++++ b/src/main/java/com/nego/simulator/agent/BuyerTools.java
+@@ -1,8 +1,15 @@
+ package com.nego.simulator.agent;
+ 
+ import com.nego.simulator.model.BuyerStrategy;
++
++
++import com.nego.simulator.model.AnomalyRecord;
++import com.nego.simulator.model.AnomalyType;
+ import dev.langchain4j.agent.tool.Tool;
+ 
++import java.util.ArrayList;
++import java.util.List;
++
+ /**
+  * 买方工具类
+  * 提供LLM tools：出价，接受，拒绝
+@@ -13,9 +20,13 @@ public class BuyerTools {
+     private final BuyerStrategy strategy;
+     private final double originalPrice;
+     private double lastOffer = 0;
++    private double opponentLastOffer = 0;
+     private boolean accepted = false;
++    private final List<AnomalyRecord> violations = new ArrayList<>();
+ 
+-
++    public void setOpponentLastOffer(double opponentLastOffer) {
++        this.opponentLastOffer = opponentLastOffer;
++    }
+ 
+     public BuyerTools(BuyerStrategy strategy, double originalPrice) {
+         this.strategy = strategy;
+@@ -27,7 +38,7 @@ public class BuyerTools {
+      * LLM通过该tool提交报价，工具内部做价格边界校验
+      * 不允许超过预算上限和无效报价
+      *
+-     * @param price 本轮报价金额
++     * @param price  本轮报价金额
+      * @param reason 出价理由
+      * @return 结构化反馈文本
+      */
+@@ -35,29 +46,41 @@ public class BuyerTools {
+     public String makeOffer(double price, String reason) {
+         double ceiling = originalPrice * strategy.getCeiling();
+ 
+-        if(price<=0) {
++        if (price <= 0) {
++            violations.add(AnomalyRecord.builder()
++                .type(AnomalyType.CONSTRAINT_VIOLATION)
++                .description("买方给出了无效负数或零报价: " + price)
++                .relevantPrice(price)
++                .build());
+             return "无效报价，价格必须大于0！";
+         }
+ 
+-        if(price > ceiling) {
++        if (price > ceiling) {
++            violations.add(AnomalyRecord.builder()
++                .type(AnomalyType.CONSTRAINT_VIOLATION)
++                .description("买方越界出价 $" + price + " (系统强制修正为上限 $" + ceiling + ")")
++                .relevantPrice(price)
++                .build());
+             price = ceiling;
+         }
+ 
+         this.lastOffer = price;
+-        return String.format("买方出价$.2f(上限$.2f),理由：%s", price, ceiling, reason);
++        return String.format("买方出价$%.2f(上限$%.2f),理由：%s", price, ceiling, reason);
+     }
+ 
+     /**
+-     * 买方接受对方报价，达成成交。
++     * 买方接受对方最新报价，达成成交。
++     * 工具恢复了价格参数以防止框架反射报错，但在内部被强制忽略，防止作弊。
+      *
+-     * @param price 接受的成交价格
++     * @param price 填入的假定价格
+      * @return 确认文本
+      */
+-    @Tool("买方接受对方报价，同意成交。传入接受的价格。")
++    @Tool("买方接受对方最新报价，同意以此前对方的最新出价直接成交。调用此方法即代表完全妥协！请传入对方最新的报价金额作为参数。")
+     public String acceptDeal(double price) {
+         this.accepted = true;
+-        this.lastOffer = price;
+-        return String.format("买方接受报价 $%.2f，交易达成。", price);
++        // 防作弊核心：无视大模型传来的幻觉参数 price，强制绑定对手刚才的真实报价！
++        this.lastOffer = this.opponentLastOffer;
++        return String.format("买方接受了对方的最新报价 $%.2f，交易达成。", this.opponentLastOffer);
+     }
+ 
+     /**
+@@ -71,16 +94,16 @@ public class BuyerTools {
+         return "买方拒绝当前报价，理由：" + reason;
+     }
+ 
+-
+     public double getLastOffer() {
+         return lastOffer;
+     }
+ 
+-
+     public boolean isAccepted() {
+         return accepted;
+     }
+ 
+-
++    public List<AnomalyRecord> getViolations() {
++        return violations;
++    }
+ 
+ }
+diff --git a/src/main/java/com/nego/simulator/agent/SellerTools.java b/src/main/java/com/nego/simulator/agent/SellerTools.java
+index 619092d..00638d9 100644
+--- a/src/main/java/com/nego/simulator/agent/SellerTools.java
++++ b/src/main/java/com/nego/simulator/agent/SellerTools.java
+@@ -1,9 +1,14 @@
+ package com.nego.simulator.agent;
+ 
+-
+ import com.nego.simulator.model.SellerStrategy;
++
++import com.nego.simulator.model.AnomalyRecord;
++import com.nego.simulator.model.AnomalyType;
+ import dev.langchain4j.agent.tool.Tool;
+ 
++import java.util.ArrayList;
++import java.util.List;
++
+ /**
+  * 卖方工具类。
+  *
+@@ -15,7 +20,13 @@ public class SellerTools {
+     private final SellerStrategy strategy;
+     private final double originalPrice;
+     private double lastOffer = 0;
++    private double opponentLastOffer = 0;
+     private boolean accepted = false;
++    private final List<AnomalyRecord> violations = new ArrayList<>();
++
++    public void setOpponentLastOffer(double opponentLastOffer) {
++        this.opponentLastOffer = opponentLastOffer;
++    }
+ 
+     public SellerTools(SellerStrategy strategy, double originalPrice) {
+         this.strategy = strategy;
+@@ -25,8 +36,10 @@ public class SellerTools {
+     /**
+      * 卖方报价。
+      *
+-     * <p>LLM 通过该工具提交报价，工具内部会做价格底线校验：
+-     * 不允许低于最低接受价格，不允许无效报价。</p>
++     * <p>
++     * LLM 通过该工具提交报价，工具内部会做价格底线校验：
++     * 不允许低于最低接受价格，不允许无效报价。
++     * </p>
+      *
+      * @param price  本轮报价金额
+      * @param reason 报价理由
+@@ -36,9 +49,19 @@ public class SellerTools {
+     public String makeOffer(double price, String reason) {
+         double floor = originalPrice * strategy.getFloor();
+         if (price <= 0) {
++            violations.add(AnomalyRecord.builder()
++                .type(AnomalyType.CONSTRAINT_VIOLATION)
++                .description("卖方给出了无效负数或零报价: " + price)
++                .relevantPrice(price)
++                .build());
+             return "无效报价，价格必须大于 0。";
+         }
+         if (price < floor) {
++            violations.add(AnomalyRecord.builder()
++                .type(AnomalyType.CONSTRAINT_VIOLATION)
++                .description("卖方越界出价 $" + price + " (系统强制修正为底线 $" + floor + ")")
++                .relevantPrice(price)
++                .build());
+             price = floor;
+         }
+         this.lastOffer = price;
+@@ -46,16 +69,18 @@ public class SellerTools {
+     }
+ 
+     /**
+-     * 卖方接受对方报价，达成成交。
++     * 卖方接受对方最新报价，达成成交。
++     * 工具恢复了价格参数以防止框架反射报错，但在内部被强制忽略，防止作弊。
+      *
+-     * @param price 接受的成交价格
++     * @param price 填入的假定价格
+      * @return 确认文本
+      */
+-    @Tool("卖方接受对方报价，同意成交。传入接受的价格。")
++    @Tool("卖方接受对方的最新报价，同意以此前对方的最新出价直接成交。调用此方法即代表完全妥协！请传入对方最新的报价金额作为参数。")
+     public String acceptDeal(double price) {
+         this.accepted = true;
+-        this.lastOffer = price;
+-        return String.format("卖方接受报价 $%.2f，交易达成。", price);
++        // 防作弊核心：无视大模型传来的幻觉参数 price，强制绑定对手刚才的真实报价！
++        this.lastOffer = this.opponentLastOffer;
++        return String.format("卖方接受了对方的最新报价 $%.2f，交易达成。", this.opponentLastOffer);
+     }
+ 
+     /**
+@@ -69,14 +94,16 @@ public class SellerTools {
+         return "卖方拒绝当前报价，理由：" + reason;
+     }
+ 
+-
+-
+     public double getLastOffer() {
+         return lastOffer;
+     }
++
+     public boolean isAccepted() {
+         return accepted;
+     }
+ 
++    public List<AnomalyRecord> getViolations() {
++        return violations;
++    }
+ 
+ }
+diff --git a/src/main/java/com/nego/simulator/config/AgentConfig.java b/src/main/java/com/nego/simulator/config/AgentConfig.java
+index 2b316dd..caaf9d7 100644
+--- a/src/main/java/com/nego/simulator/config/AgentConfig.java
++++ b/src/main/java/com/nego/simulator/config/AgentConfig.java
+@@ -1,7 +1,7 @@
+ package com.nego.simulator.config;
+ 
+ import dev.langchain4j.model.chat.ChatLanguageModel;
+-import dev.langchain4j.model.dashscope.QwenChatModel;
++import dev.langchain4j.model.openai.OpenAiChatModel;
+ import org.springframework.beans.factory.annotation.Value;
+ import org.springframework.context.annotation.Bean;
+ import org.springframework.context.annotation.Configuration;
+@@ -23,12 +23,16 @@ public class AgentConfig {
+     @Value("${dashscope.api-key}")
+     private String apiKey;
+ 
+-    @Value("${dashscope.model-name:qwen-max}")
++    @Value("${dashscope.model-name:qwen3.5-plus}")
+     private String modelName;
+ 
++    @Value("${dashscope.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}")
++    private String baseUrl;
++
+     @Bean
+     public ChatLanguageModel chatLanguageModel() {
+-        return QwenChatModel.builder()
++        return OpenAiChatModel.builder()
++                .baseUrl(baseUrl)
+                 .apiKey(apiKey)
+                 .modelName(modelName)
+                 .build();
+diff --git a/src/main/java/com/nego/simulator/config/TransportConfig.java b/src/main/java/com/nego/simulator/config/TransportConfig.java
+index 7edb704..977f071 100644
+--- a/src/main/java/com/nego/simulator/config/TransportConfig.java
++++ b/src/main/java/com/nego/simulator/config/TransportConfig.java
+@@ -1,7 +1,9 @@
+ package com.nego.simulator.config;
+ 
++import com.fasterxml.jackson.databind.ObjectMapper;
+ import com.nego.simulator.model.BuyerStrategy;
+ import com.nego.simulator.model.SellerStrategy;
++import com.nego.simulator.service.A2aHttpTransport;
+ import com.nego.simulator.service.AgentTransport;
+ import com.nego.simulator.service.HttpTransport;
+ import com.nego.simulator.service.InProcessTransport;
+@@ -40,9 +42,21 @@ public class TransportConfig {
+ 
+         @Bean
+         public TransportFactory transportFactory(RestTemplate restTemplate,
+-                                                  @Value("${nego.agent.buyer.url}") String buyerUrl,
+-                                                  @Value("${nego.agent.seller.url}") String sellerUrl) {
++                                                   @Value("${nego.agent.buyer.url}") String buyerUrl,
++                                                   @Value("${nego.agent.seller.url}") String sellerUrl) {
+             return (bs, ss, ap) -> new HttpTransport(restTemplate, buyerUrl, sellerUrl, bs, ss, ap);
+         }
+     }
++
++    @Configuration
++    @ConditionalOnProperty(name = "nego.transport", havingValue = "a2a")
++    static class A2aConfig {
++
++        @Bean
++        public TransportFactory transportFactory(ObjectMapper objectMapper,
++                                                   @Value("${nego.agent.buyer.url}") String buyerUrl,
++                                                   @Value("${nego.agent.seller.url}") String sellerUrl) {
++            return (bs, ss, ap) -> new A2aHttpTransport(buyerUrl, sellerUrl, bs, ss, ap, objectMapper);
++        }
++    }
+ }
+diff --git a/src/main/java/com/nego/simulator/controller/NegotiationController.java b/src/main/java/com/nego/simulator/controller/NegotiationController.java
+index 5585298..8b9ed72 100644
+--- a/src/main/java/com/nego/simulator/controller/NegotiationController.java
++++ b/src/main/java/com/nego/simulator/controller/NegotiationController.java
+@@ -3,6 +3,7 @@ package com.nego.simulator.controller;
+ 
+ import com.nego.simulator.model.*;
+ import com.nego.simulator.service.NegotiationService;
++import io.a2a.spec.AgentCard;
+ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+ import org.springframework.http.ResponseEntity;
+ import org.springframework.web.bind.annotation.*;
+@@ -16,9 +17,21 @@ public class NegotiationController {
+ 
+ 
+     private final NegotiationService negotiationService;
++    private final AgentCard agentCard;
+ 
+-    public NegotiationController(NegotiationService negotiationService) {
++    public NegotiationController(NegotiationService negotiationService, AgentCard agentCard) {
+         this.negotiationService = negotiationService;
++        this.agentCard = agentCard;
++    }
++
++    @GetMapping("/.well-known/agent-card.json")
++    public AgentCard getOrchestratorCard() {
++        return agentCard;
++    }
++
++    @GetMapping("/a2a/card")
++    public AgentCard getOrchestratorCardAlt() {
++        return agentCard;
+     }
+ 
+     //获取商品列表
+diff --git a/src/main/java/com/nego/simulator/model/NegotiationConfig.java b/src/main/java/com/nego/simulator/model/NegotiationConfig.java
+index b52902b..6c91045 100644
+--- a/src/main/java/com/nego/simulator/model/NegotiationConfig.java
++++ b/src/main/java/com/nego/simulator/model/NegotiationConfig.java
+@@ -65,4 +65,11 @@ public class NegotiationConfig {
+      * </ul>
+      */
+     private Double convergenceThreshold;
++
++    /**
++     * RAG开关/模式。
++     *
++     * <p>决定谁能使用RAG：无、双向、仅买、仅卖。
++     */
++    private RagMode ragMode;
+ }
+diff --git a/src/main/java/com/nego/simulator/model/NegotiationMessage.java b/src/main/java/com/nego/simulator/model/NegotiationMessage.java
+index aeed8f8..e448400 100644
+--- a/src/main/java/com/nego/simulator/model/NegotiationMessage.java
++++ b/src/main/java/com/nego/simulator/model/NegotiationMessage.java
+@@ -101,4 +101,17 @@ public class NegotiationMessage {
+      * </ul>
+      */
+     private LocalDateTime timestamp;
++
++    /**
++     * RAG 对话改写结果 (Query Rewrite)。
++     * 记录供后续分析使用的 DeepSeek 改写状态。
++     */
++    private String ragQuery;
++
++    /**
++     * RAG 返回的核心策略内容。
++     * 记录这轮系统到底喂了什么策略给 Agent。
++     */
++    private String ragContext;
++
+ }
+diff --git a/src/main/java/com/nego/simulator/model/NegotiationResult.java b/src/main/java/com/nego/simulator/model/NegotiationResult.java
+index 4c4875f..55eb498 100644
+--- a/src/main/java/com/nego/simulator/model/NegotiationResult.java
++++ b/src/main/java/com/nego/simulator/model/NegotiationResult.java
+@@ -5,26 +5,33 @@ import lombok.Builder;
+ import lombok.Data;
+ import lombok.NoArgsConstructor;
+ 
++import java.util.ArrayList;
+ import java.util.List;
+ 
+ /**
+  * 谈判结果领域模型。
+  *
+- * <p>该类用于表示一场完整谈判结束后的最终输出结果，
+- * 是控制层返回给前端页面、历史记录模块和统计分析模块的核心数据对象。</p>
++ * <p>
++ * 该类用于表示一场完整谈判结束后的最终输出结果，
++ * 是控制层返回给前端页面、历史记录模块和统计分析模块的核心数据对象。
++ * </p>
+  *
+- * <p>这版设计采用轻量工程方案，不追求复杂架构，
+- * 重点是把“谈判是否成功、最终价格是多少、用了什么策略、过程消息有哪些”这些关键信息表达清楚。</p>
++ * <p>
++ * 这版设计采用轻量工程方案，不追求复杂架构，
++ * 重点是把“谈判是否成功、最终价格是多少、用了什么策略、过程消息有哪些”这些关键信息表达清楚。
++ * </p>
+  *
+- * <p>通过这个对象，系统可以很直观地回答以下问题：</p>
++ * <p>
++ * 通过这个对象，系统可以很直观地回答以下问题：
++ * </p>
+  * <ul>
+- *     <li>这场谈判最终是否成交</li>
+- *     <li>成交价格是多少</li>
+- *     <li>相对原始价格优惠了多少</li>
+- *     <li>总共进行了多少轮</li>
+- *     <li>买方和卖方分别采用了什么策略</li>
+- *     <li>双方对最终结果的满意度如何</li>
+- *     <li>完整的谈判过程消息是什么</li>
++ * <li>这场谈判最终是否成交</li>
++ * <li>成交价格是多少</li>
++ * <li>相对原始价格优惠了多少</li>
++ * <li>总共进行了多少轮</li>
++ * <li>买方和卖方分别采用了什么策略</li>
++ * <li>双方对最终结果的满意度如何</li>
++ * <li>完整的谈判过程消息是什么</li>
+  * </ul>
+  */
+ @Data
+@@ -36,80 +43,118 @@ public class NegotiationResult {
+     /**
+      * 是否达成成交。
+      *
+-     * <p>true 表示买卖双方最终达成一致；
+-     * false 表示谈判失败、达到最大轮数仍未成交，或者没有满足收敛条件。</p>
++     * <p>
++     * true 表示买卖双方最终达成一致；
++     * false 表示谈判失败、达到最大轮数仍未成交，或者没有满足收敛条件。
++     * </p>
+      */
+     private Boolean agreed;
+ 
+     /**
+      * 最终成交价格。
+      *
+-     * <p>如果谈判成功，该字段表示最后达成一致的成交价；
+-     * 如果谈判失败，该字段可以为空。</p>
++     * <p>
++     * 如果谈判成功，该字段表示最后达成一致的成交价；
++     * 如果谈判失败，该字段可以为空。
++     * </p>
+      */
+     private Double finalPrice;
+ 
+     /**
+      * 原始标价。
+      *
+-     * <p>通常来自 {@link ServiceInfo} 的 askingPrice，
+-     * 用于和 finalPrice 对比，从而计算折扣率和议价效果。</p>
++     * <p>
++     * 通常来自 {@link ServiceInfo} 的 askingPrice，
++     * 用于和 finalPrice 对比，从而计算折扣率和议价效果。
++     * </p>
+      */
+     private Double originalPrice;
+ 
+     /**
+      * 折扣率。
+      *
+-     * <p>表示最终成交价格相对于原始标价的优惠程度。
+-     * 例如 0.20 表示优惠了 20%。</p>
++     * <p>
++     * 表示最终成交价格相对于原始标价的优惠程度。
++     * 例如 0.20 表示优惠了 20%。
++     * </p>
+      */
+     private Double discount;
+ 
+     /**
+      * 实际谈判轮数。
+      *
+-     * <p>表示从开始到结束一共进行了多少轮报价与反报价，
+-     * 可用于衡量不同策略的谈判效率。</p>
++     * <p>
++     * 表示从开始到结束一共进行了多少轮报价与反报价，
++     * 可用于衡量不同策略的谈判效率。
++     * </p>
+      */
+     private Integer rounds;
+ 
+     /**
+      * 本次谈判的完整消息历史。
+      *
+-     * <p>按时间顺序记录买方、卖方以及系统消息，
+-     * 便于前端展示谈判回放，也便于后续调试和历史查询。</p>
++     * <p>
++     * 按时间顺序记录买方、卖方以及系统消息，
++     * 便于前端展示谈判回放，也便于后续调试和历史查询。
++     * </p>
+      */
+     private List<NegotiationMessage> messages;
+ 
+     /**
+      * 买方满意度。
+      *
+-     * <p>用于从买方视角评价本次谈判结果是否理想。
+-     * 一般可以根据最终成交价、预算压力和谈判轮数综合计算。</p>
++     * <p>
++     * 用于从买方视角评价本次谈判结果是否理想。
++     * 一般可以根据最终成交价、预算压力和谈判轮数综合计算。
++     * </p>
+      */
+     private Double buyerSatisfaction;
+ 
+     /**
+      * 卖方满意度。
+      *
+-     * <p>用于从卖方视角评价本次谈判结果是否理想。
+-     * 一般可以根据最终成交价、让步幅度和成交效率综合计算。</p>
++     * <p>
++     * 用于从卖方视角评价本次谈判结果是否理想。
++     * 一般可以根据最终成交价、让步幅度和成交效率综合计算。
++     * </p>
+      */
+     private Double sellerSatisfaction;
+ 
+     /**
+      * 买方策略名称。
+      *
+-     * <p>用于记录本次谈判中买方采用的是哪一种策略，
+-     * 方便在历史记录和统计分析中按策略维度做对比。</p>
++     * <p>
++     * 用于记录本次谈判中买方采用的是哪一种策略，
++     * 方便在历史记录和统计分析中按策略维度做对比。
++     * </p>
+      */
+     private String buyerStrategy;
+ 
+     /**
+      * 卖方策略名称。
+      *
+-     * <p>用于记录本次谈判中卖方采用的是哪一种策略，
+-     * 方便在历史记录和统计分析中按策略维度做对比。</p>
++     * <p>
++     * 用于记录本次谈判中卖方采用的是哪一种策略，
++     * 方便在历史记录和统计分析中按策略维度做对比。
++     * </p>
+      */
+     private String sellerStrategy;
++    
++    /**
++     * RAG模式。
++     */
++    private String ragMode;
++    
++    /**
++     * 商品ID。
++     */
++    private String serviceId;
++
++    /**
++     * 异常行为监控记录
++     * 
++     * 记录本次谈判过程中出现的策略越界，僵局或者超额支付等行为
++     */
++    @Builder.Default
++    private List<AnomalyRecord> anomalyRecords = new ArrayList<>();
+ }
+diff --git a/src/main/java/com/nego/simulator/service/AgentTransport.java b/src/main/java/com/nego/simulator/service/AgentTransport.java
+index 712ba0b..3d83816 100644
+--- a/src/main/java/com/nego/simulator/service/AgentTransport.java
++++ b/src/main/java/com/nego/simulator/service/AgentTransport.java
+@@ -1,43 +1,60 @@
+ package com.nego.simulator.service;
+ 
+ import com.nego.simulator.model.AnomalyRecord;
++import com.nego.simulator.model.OfferResponse;
+ 
+ import java.util.List;
++import java.util.concurrent.CompletableFuture;
+ 
+ /**
+  * AgentTransport — Phase 0.2 核心抽象接口。
+  *
+- * <p>
+- * 封装"向对方 Agent 发消息并拿回报价"的全部交互。
+- * </p>
++ * <p>封装"向对方 Agent 发消息并拿回报价"的全部交互。</p>
+  *
+  * <ul>
+- *   <li>当前实现：{@link InProcessTransport}（JVM 内存直调，与老版行为完全一致）</li>
+- *   <li>Phase 1 实现：{@code A2aHttpTransport}（HTTP + Google A2A 协议）</li>
++ *   <li>当前实现：{@link InProcessTransport}（JVM 内存直调）</li>
++ *   <li>Phase 1 实现：A2aHttpTransport（HTTP + Google A2A 协议）</li>
+  * </ul>
+  *
+- * <p>Orchestrator 只依赖此接口，不关心对方是同进程还是跨网络。</p>
++ * <p><b>为什么返回 CompletableFuture？</b><br>
++ * Phase 2 sealed-bid 协议需要同时向 Buyer 和 Seller 发报价请求，
++ * 用 {@code CompletableFuture.allOf(sendToBuyer(...), sendToSeller(...))}
++ * 可以直接并发调用，无需再改接口。
++ * InProcessTransport 在同步场景下直接返回
++ * {@code CompletableFuture.completedFuture(result)} 即可。</p>
++ *
++ * <p>Orchestrator 从此不关心对方是同进程还是跨网络，也不关心是串行还是并行。</p>
+  */
+ public interface AgentTransport extends AutoCloseable {
+ 
+-    String sendToBuyer(String context);
+-
+-    String sendToSeller(String context);
+-
+-    boolean isBuyerAccepted();
+-
+-    boolean isSellerAccepted();
+-
+-    double getBuyerLastOffer();
+-
+-    double getSellerLastOffer();
+-
++    /**
++     * 向买方发送本轮谈判上下文，异步返回报价结果。
++     *
++     * @param context 当前轮次的谈判状态（含策略参数、历史报价、RAG 建议等）
++     * @return 包含文本回复、报价金额、是否接受、违规记录的 Future
++     */
++    CompletableFuture<OfferResponse> sendToBuyer(String context);
++
++    /**
++     * 向卖方发送本轮谈判上下文，异步返回报价结果。
++     */
++    CompletableFuture<OfferResponse> sendToSeller(String context);
++
++    /**
++     * 在调用 sendToBuyer 前，告知买方对手（卖方）的最新报价，
++     * 供 Tools 层 acceptDeal 防作弊绑定使用。
++     */
+     void setOpponentOfferForBuyer(double sellerPrice);
+ 
++    /**
++     * 在调用 sendToSeller 前，告知卖方对手（买方）的最新报价。
++     */
+     void setOpponentOfferForSeller(double buyerPrice);
+ 
++    /** 本场谈判买方累计的约束违规记录。 */
+     List<AnomalyRecord> getBuyerViolations();
+ 
++    /** 本场谈判卖方累计的约束违规记录。 */
+     List<AnomalyRecord> getSellerViolations();
+ 
+     @Override
+diff --git a/src/main/java/com/nego/simulator/service/BuyerAgentService.java b/src/main/java/com/nego/simulator/service/BuyerAgentService.java
+index c11766c..f88500b 100644
+--- a/src/main/java/com/nego/simulator/service/BuyerAgentService.java
++++ b/src/main/java/com/nego/simulator/service/BuyerAgentService.java
+@@ -29,7 +29,7 @@ public class BuyerAgentService {
+ 
+     public AgentInitResponse init(AgentInitRequest request) {
+         BuyerStrategy strategy = BuyerStrategy.valueOf(request.getStrategy());
+-        BuyerTools tools = new BuyerTools(strategy, request.getAskPrice());
++        BuyerTools tools = new BuyerTools(strategy, request.getAskingPrice());
+         BuyerAgent agent = AiServices.builder(BuyerAgent.class)
+                 .chatLanguageModel(chatLanguageModel)
+                 .tools(tools)
+@@ -54,6 +54,10 @@ public class BuyerAgentService {
+                 .build();
+     }
+ 
++    public boolean hasSession(String sessionId) {
++        return sessions.containsKey(sessionId);
++    }
++
+     public void destroySession(String sessionId) {
+         sessions.remove(sessionId);
+     }
+diff --git a/src/main/java/com/nego/simulator/service/HttpTransport.java b/src/main/java/com/nego/simulator/service/HttpTransport.java
+index c0be231..1bc9519 100644
+--- a/src/main/java/com/nego/simulator/service/HttpTransport.java
++++ b/src/main/java/com/nego/simulator/service/HttpTransport.java
+@@ -6,15 +6,14 @@ import org.springframework.web.client.RestTemplate;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
++import java.util.concurrent.CompletableFuture;
+ 
+ /**
+  * HttpTransport — AgentTransport 的 HTTP 远程调用实现。
+  *
+- * <p>
+- * 通过 REST 调用远程 Buyer / Seller Agent 服务，
+- * 替代 InProcessTransport 的同进程直调。
+- * Orchestrator 启动此 Transport 时，按 nego.agent.buyer.url / seller.url 配置连接远端。
+- * </p>
++ * <p>通过 REST 调用远程 Buyer / Seller Agent 服务。
++ * 当前实现在调用线程同步等待 HTTP 响应，然后包装成 completedFuture 返回。
++ * Phase 2 如需真正并发，可改用 AsyncRestTemplate 或 WebClient。</p>
+  */
+ public class HttpTransport implements AgentTransport {
+ 
+@@ -24,10 +23,6 @@ public class HttpTransport implements AgentTransport {
+     private final String buyerSessionId;
+     private final String sellerSessionId;
+ 
+-    private double buyerLastOffer;
+-    private double sellerLastOffer;
+-    private boolean buyerAccepted;
+-    private boolean sellerAccepted;
+     private double opponentOfferForBuyer;
+     private double opponentOfferForSeller;
+ 
+@@ -62,7 +57,7 @@ public class HttpTransport implements AgentTransport {
+     }
+ 
+     @Override
+-    public String sendToBuyer(String context) {
++    public CompletableFuture<OfferResponse> sendToBuyer(String context) {
+         AgentCallRequest request = AgentCallRequest.builder()
+                 .sessionId(buyerSessionId)
+                 .context(context)
+@@ -71,16 +66,21 @@ public class HttpTransport implements AgentTransport {
+         ResponseEntity<AgentCallResponse> resp = restTemplate.postForEntity(
+                 buyerBaseUrl + "/agent/buyer/call", request, AgentCallResponse.class);
+         AgentCallResponse body = resp.getBody();
+-        this.buyerLastOffer = body.getLastOffer();
+-        this.buyerAccepted = body.isAccepted();
++
+         if (body.getViolations() != null) {
+-            this.buyerViolations.addAll(body.getViolations());
++            buyerViolations.addAll(body.getViolations());
+         }
+-        return body.getResponse();
++
++        return CompletableFuture.completedFuture(OfferResponse.builder()
++                .text(body.getResponse())
++                .lastOffer(body.getLastOffer())
++                .accepted(body.isAccepted())
++                .violations(body.getViolations())
++                .build());
+     }
+ 
+     @Override
+-    public String sendToSeller(String context) {
++    public CompletableFuture<OfferResponse> sendToSeller(String context) {
+         AgentCallRequest request = AgentCallRequest.builder()
+                 .sessionId(sellerSessionId)
+                 .context(context)
+@@ -89,32 +89,17 @@ public class HttpTransport implements AgentTransport {
+         ResponseEntity<AgentCallResponse> resp = restTemplate.postForEntity(
+                 sellerBaseUrl + "/agent/seller/call", request, AgentCallResponse.class);
+         AgentCallResponse body = resp.getBody();
+-        this.sellerLastOffer = body.getLastOffer();
+-        this.sellerAccepted = body.isAccepted();
++
+         if (body.getViolations() != null) {
+-            this.sellerViolations.addAll(body.getViolations());
++            sellerViolations.addAll(body.getViolations());
+         }
+-        return body.getResponse();
+-    }
+-
+-    @Override
+-    public boolean isBuyerAccepted() {
+-        return buyerAccepted;
+-    }
+ 
+-    @Override
+-    public boolean isSellerAccepted() {
+-        return sellerAccepted;
+-    }
+-
+-    @Override
+-    public double getBuyerLastOffer() {
+-        return buyerLastOffer;
+-    }
+-
+-    @Override
+-    public double getSellerLastOffer() {
+-        return sellerLastOffer;
++        return CompletableFuture.completedFuture(OfferResponse.builder()
++                .text(body.getResponse())
++                .lastOffer(body.getLastOffer())
++                .accepted(body.isAccepted())
++                .violations(body.getViolations())
++                .build());
+     }
+ 
+     @Override
+diff --git a/src/main/java/com/nego/simulator/service/InProcessTransport.java b/src/main/java/com/nego/simulator/service/InProcessTransport.java
+index 8627533..684bf1d 100644
+--- a/src/main/java/com/nego/simulator/service/InProcessTransport.java
++++ b/src/main/java/com/nego/simulator/service/InProcessTransport.java
+@@ -6,22 +6,24 @@ import com.nego.simulator.agent.SellerAgent;
+ import com.nego.simulator.agent.SellerTools;
+ import com.nego.simulator.model.AnomalyRecord;
+ import com.nego.simulator.model.BuyerStrategy;
++import com.nego.simulator.model.OfferResponse;
+ import com.nego.simulator.model.SellerStrategy;
+ import dev.langchain4j.model.chat.ChatLanguageModel;
+ import dev.langchain4j.service.AiServices;
+ 
+ import java.util.List;
++import java.util.concurrent.CompletableFuture;
+ 
+ /**
+  * InProcessTransport — AgentTransport 的 JVM 内存实现。
+  *
+- * <p>
+- * 持有 BuyerAgent / SellerAgent 以及对应的有状态 BuyerTools / SellerTools。
+- * 调用 sendToBuyer / sendToSeller 时直接在同一进程中调用 LLM，与原来
+- * {@code NegotiationService.runNegotiationLoop} 的内联调用行为完全等价。
+- * </p>
++ * <p>持有 BuyerAgent / SellerAgent 以及对应的有状态 BuyerTools / SellerTools。
++ * 调用时直接在同一进程中调用 LLM，与原 NegotiationService 内联调用行为完全等价。</p>
+  *
+- * <p>Phase 1 时此类不变，Orchestrator 只需换用 {@code A2aHttpTransport}。</p>
++ * <p>返回 {@code CompletableFuture.completedFuture()} 满足接口契约，
++ * 同步场景下无额外开销；Phase 2 并发调用时可直接换用异步实现。</p>
++ *
++ * <p>Phase 1 时此类不变，Orchestrator 只需换用 A2aHttpTransport。</p>
+  */
+ public class InProcessTransport implements AgentTransport {
+ 
+@@ -49,33 +51,25 @@ public class InProcessTransport implements AgentTransport {
+     }
+ 
+     @Override
+-    public String sendToBuyer(String context) {
+-        return buyerAgent.negotiate(context);
+-    }
+-
+-    @Override
+-    public String sendToSeller(String context) {
+-        return sellerAgent.negotiate(context);
+-    }
+-
+-    @Override
+-    public boolean isBuyerAccepted() {
+-        return buyerTools.isAccepted();
+-    }
+-
+-    @Override
+-    public boolean isSellerAccepted() {
+-        return sellerTools.isAccepted();
+-    }
+-
+-    @Override
+-    public double getBuyerLastOffer() {
+-        return buyerTools.getLastOffer();
++    public CompletableFuture<OfferResponse> sendToBuyer(String context) {
++        String text = buyerAgent.negotiate(context);
++        return CompletableFuture.completedFuture(OfferResponse.builder()
++                .text(text)
++                .lastOffer(buyerTools.getLastOffer())
++                .accepted(buyerTools.isAccepted())
++                .violations(buyerTools.getViolations())
++                .build());
+     }
+ 
+     @Override
+-    public double getSellerLastOffer() {
+-        return sellerTools.getLastOffer();
++    public CompletableFuture<OfferResponse> sendToSeller(String context) {
++        String text = sellerAgent.negotiate(context);
++        return CompletableFuture.completedFuture(OfferResponse.builder()
++                .text(text)
++                .lastOffer(sellerTools.getLastOffer())
++                .accepted(sellerTools.isAccepted())
++                .violations(sellerTools.getViolations())
++                .build());
+     }
+ 
+     @Override
+@@ -100,6 +94,7 @@ public class InProcessTransport implements AgentTransport {
+ 
+     @Override
+     public void close() {
++        // 同进程无外部资源需要释放
+     }
+ 
+     public BuyerTools getBuyerTools() {
+diff --git a/src/main/java/com/nego/simulator/service/NegotiationOrchestrator.java b/src/main/java/com/nego/simulator/service/NegotiationOrchestrator.java
+index 4bcab50..910d108 100644
+--- a/src/main/java/com/nego/simulator/service/NegotiationOrchestrator.java
++++ b/src/main/java/com/nego/simulator/service/NegotiationOrchestrator.java
+@@ -27,13 +27,16 @@ public class NegotiationOrchestrator {
+     /**
+      * 执行一场完整的多轮谈判。
+      *
+-     * @param service    商品信息
+-     * @param config     谈判配置（策略、轮数、收敛阈值、RAG 模式）
+-     * @param transport  Agent 传输层（同进程 or 跨网络）
+-     * @param maxRounds  最大谈判轮数
+-     * @param threshold  收敛阈值（价差比例）
+-     * @param anomalies  异常记录列表（由调用方传入，本方法负责追加）
+-     * @return 谈判结果
++     * <p>每轮流程：
++     * <ol>
++     *   <li>买方回合：设置对手报价 → RAG（可选）→ 调 transport.sendToBuyer() → 判断接受</li>
++     *   <li>卖方回合：镜像执行</li>
++     *   <li>收敛判断：价差比例 ≤ threshold → 取中间价成交</li>
++     * </ol>
++     * </p>
++     *
++     * <p>{@link AgentTransport#sendToBuyer} 返回 {@link java.util.concurrent.CompletableFuture}，
++     * 当前用 {@code .join()} 同步等待。Phase 2 sealed-bid 可改为 {@code allOf} 并发。</p>
+      */
+     public NegotiationResult run(ServiceInfo service, NegotiationConfig config,
+                                   AgentTransport transport,
+@@ -46,7 +49,6 @@ public class NegotiationOrchestrator {
+ 
+         for (int round = 1; round <= maxRounds; round++) {
+ 
+-            // ── Per-round span ──
+             Span roundSpan = tracer.spanBuilder("negotiation.round")
+                     .setAttribute("round", round)
+                     .startSpan();
+@@ -76,23 +78,25 @@ public class NegotiationOrchestrator {
+                     buyerContext += "\n[相关策略]\n" + buyerRagContext;
+                 }
+ 
++                // agent.buyer.call span 覆盖整个 LLM 调用（含网络 + 推理耗时）
+                 Span buyerCallSpan = tracer.spanBuilder("agent.buyer.call")
+                         .setAttribute("round", round).startSpan();
+-                String buyerResponse;
++                OfferResponse buyerOffer;
+                 try (Scope sc = buyerCallSpan.makeCurrent()) {
+-                    buyerResponse = transport.sendToBuyer(buyerContext);
++                    buyerOffer = transport.sendToBuyer(buyerContext).join();
+                 } finally {
+                     buyerCallSpan.end();
+                 }
+-                buyerPrice = transport.getBuyerLastOffer();
++
++                buyerPrice = buyerOffer.getLastOffer();
+                 roundSpan.setAttribute("buyer.price", buyerPrice);
+ 
+                 messages.add(NegotiationMessage.builder()
+-                        .role("BUYER").content(buyerResponse).price(buyerPrice)
++                        .role("BUYER").content(buyerOffer.getText()).price(buyerPrice)
+                         .round(round).ragQuery(buyerRagQuery).ragContext(buyerRagContext)
+                         .timestamp(LocalDateTime.now()).build());
+ 
+-                if (transport.isBuyerAccepted()) {
++                if (buyerOffer.isAccepted()) {
+                     roundSpan.setAttribute("outcome", "buyer.accepted");
+                     return buildResult(true, buyerPrice, service, messages, round, config);
+                 }
+@@ -123,21 +127,22 @@ public class NegotiationOrchestrator {
+ 
+                 Span sellerCallSpan = tracer.spanBuilder("agent.seller.call")
+                         .setAttribute("round", round).startSpan();
+-                String sellerResponse;
++                OfferResponse sellerOffer;
+                 try (Scope sc = sellerCallSpan.makeCurrent()) {
+-                    sellerResponse = transport.sendToSeller(sellerContext);
++                    sellerOffer = transport.sendToSeller(sellerContext).join();
+                 } finally {
+                     sellerCallSpan.end();
+                 }
+-                sellerPrice = transport.getSellerLastOffer();
++
++                sellerPrice = sellerOffer.getLastOffer();
+                 roundSpan.setAttribute("seller.price", sellerPrice);
+ 
+                 messages.add(NegotiationMessage.builder()
+-                        .role("SELLER").content(sellerResponse).price(sellerPrice)
++                        .role("SELLER").content(sellerOffer.getText()).price(sellerPrice)
+                         .round(round).ragQuery(sellerRagQuery).ragContext(sellerRagContext)
+                         .timestamp(LocalDateTime.now()).build());
+ 
+-                if (transport.isSellerAccepted()) {
++                if (sellerOffer.isAccepted()) {
+                     roundSpan.setAttribute("outcome", "seller.accepted");
+                     return buildResult(true, sellerPrice, service, messages, round, config);
+                 }
+diff --git a/src/main/java/com/nego/simulator/service/NegotiationService.java b/src/main/java/com/nego/simulator/service/NegotiationService.java
+index d46039d..2774fc9 100644
+--- a/src/main/java/com/nego/simulator/service/NegotiationService.java
++++ b/src/main/java/com/nego/simulator/service/NegotiationService.java
+@@ -75,7 +75,7 @@ public class NegotiationService {
+             double threshold = config.getConvergenceThreshold() != null ? config.getConvergenceThreshold() : 0.03;
+ 
+             // 创建本场谈判独享的 Transport（InProcess 或 Http，由 TransportFactory 决定）
+-            try (AgentTransport transport = transportFactory.createTransport(
++            try (AgentTransport transport = transportFactory.create(
+                     config.getBuyerStrategy(), config.getSellerStrategy(), service.getAskingPrice())) {
+ 
+                 // 调用 Orchestrator 执行谈判循环
+diff --git a/src/main/java/com/nego/simulator/service/SellerAgentService.java b/src/main/java/com/nego/simulator/service/SellerAgentService.java
+index 7aba9dc..cb44f33 100644
+--- a/src/main/java/com/nego/simulator/service/SellerAgentService.java
++++ b/src/main/java/com/nego/simulator/service/SellerAgentService.java
+@@ -29,7 +29,7 @@ public class SellerAgentService {
+ 
+     public AgentInitResponse init(AgentInitRequest request) {
+         SellerStrategy strategy = SellerStrategy.valueOf(request.getStrategy());
+-        SellerTools tools = new SellerTools(strategy, request.getAskPrice());
++        SellerTools tools = new SellerTools(strategy, request.getAskingPrice());
+         SellerAgent agent = AiServices.builder(SellerAgent.class)
+                 .chatLanguageModel(chatLanguageModel)
+                 .tools(tools)
+@@ -54,6 +54,10 @@ public class SellerAgentService {
+                 .build();
+     }
+ 
++    public boolean hasSession(String sessionId) {
++        return sessions.containsKey(sessionId);
++    }
++
+     public void destroySession(String sessionId) {
+         sessions.remove(sessionId);
+     }
+diff --git a/src/main/resources/application-orchestrator.yml b/src/main/resources/application-orchestrator.yml
+index 2419dd6..22c6a4d 100644
+--- a/src/main/resources/application-orchestrator.yml
++++ b/src/main/resources/application-orchestrator.yml
+@@ -3,7 +3,7 @@ server:
+ 
+ nego:
+   role: orchestrator
+-  transport: http
++  transport: a2a
+   agent:
+     buyer:
+       url: http://localhost:8081
+diff --git a/src/main/resources/application.yml.example b/src/main/resources/application.yml.example
+index 6e58ec2..2a770e0 100644
+--- a/src/main/resources/application.yml.example
++++ b/src/main/resources/application.yml.example
+@@ -4,13 +4,19 @@ server:
+ spring:
+   application:
+     name: negotiation-simulator
++  data:
++    redis:
++      host: 127.0.0.1
++      port: 6379
+ 
+ # 这里填写你的百炼凭证
+ dashscope:
+   api-key: your-api-key-here
+-  model-name: qwen-max
++  base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
++  model-name: qwen3.5-plus
+ 
+ logging:
+   level:
+     root: INFO
+     com.nego.simulator: DEBUG
++
+--- /dev/null
++++ b/Dockerfile
+0a1,13
+> FROM eclipse-temurin:17-jre-alpine
+> WORKDIR /app
+> 
+> RUN apk add --no-cache curl && \
+>     curl -L -o /app/opentelemetry-javaagent.jar \
+>     https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/latest/download/opentelemetry-javaagent.jar
+> 
+> COPY target/negotiation-simulator-0.0.1-SNAPSHOT.jar app.jar
+> 
+> ENTRYPOINT ["java", \
+>   "-Dotel.java.global-autoconfigure.enabled=true", \
+>   "-javaagent:/app/opentelemetry-javaagent.jar", \
+>   "-jar", "app.jar"]
+--- /dev/null
++++ b/docker-compose.yml
+0a1,61
+> version: '3.9'
+> services:
+> 
+>   buyer-agent:
+>     build: .
+>     ports: ["8081:8081"]
+>     environment:
+>       SPRING_PROFILES_ACTIVE: buyer
+>       SERVER_PORT: "8081"
+>       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+>       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+>       OTEL_SERVICE_NAME: negotiation-buyer
+>     depends_on:
+>       redis: { condition: service_healthy }
+>     restart: on-failure
+> 
+>   seller-agent:
+>     build: .
+>     ports: ["8082:8082"]
+>     environment:
+>       SPRING_PROFILES_ACTIVE: seller
+>       SERVER_PORT: "8082"
+>       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+>       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+>       OTEL_SERVICE_NAME: negotiation-seller
+>     depends_on:
+>       redis: { condition: service_healthy }
+>     restart: on-failure
+> 
+>   orchestrator:
+>     build: .
+>     ports: ["8080:8080"]
+>     environment:
+>       SPRING_PROFILES_ACTIVE: orchestrator
+>       SERVER_PORT: "8080"
+>       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+>       NEGO_AGENT_BUYER_URL: http://buyer-agent:8081
+>       NEGO_AGENT_SELLER_URL: http://seller-agent:8082
+>       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+>       OTEL_SERVICE_NAME: negotiation-orchestrator
+>     depends_on:
+>       buyer-agent: { condition: service_started }
+>       seller-agent: { condition: service_started }
+>       redis: { condition: service_healthy }
+>       jaeger: { condition: service_started }
+>     restart: on-failure
+> 
+>   redis:
+>     image: redis:7-alpine
+>     ports: ["6379:6379"]
+>     healthcheck:
+>       test: ["CMD", "redis-cli", "ping"]
+>       interval: 5s
+>       timeout: 3s
+>       retries: 5
+> 
+>   jaeger:
+>     image: jaegertracing/all-in-one:1.55
+>     ports:
+>       - "16686:16686"
+>       - "4317:4317"
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/a2a/AgentCardConfig.java
+0a1,73
+> package com.nego.simulator.a2a;
+> 
+> import io.a2a.spec.AgentCapabilities;
+> import io.a2a.spec.AgentCard;
+> import io.a2a.spec.AgentProvider;
+> import io.a2a.spec.AgentSkill;
+> import org.springframework.beans.factory.annotation.Value;
+> import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+> import org.springframework.context.annotation.Bean;
+> import org.springframework.context.annotation.Configuration;
+> 
+> import java.util.List;
+> 
+> @Configuration
+> public class AgentCardConfig {
+> 
+>     @Bean
+>     @ConditionalOnProperty(name = "nego.role", havingValue = "buyer")
+>     public AgentCard buyerAgentCard(@Value("${server.port:8081}") int port) {
+>         return new AgentCard.Builder()
+>                 .name("NegotiationBuyerAgent")
+>                 .description("LLM-powered buyer agent for iterative price negotiation")
+>                 .url("http://buyer-agent:" + port)
+>                 .provider(new AgentProvider("nego-simulator", "https://github.com/nego-simulator"))
+>                 .version("1.0.0")
+>                 .capabilities(new AgentCapabilities(false, false, false, List.of()))
+>                 .defaultInputModes(List.of("text"))
+>                 .defaultOutputModes(List.of("text"))
+>                 .skills(List.of(new AgentSkill(
+>                         "negotiate_price", "Price Negotiation",
+>                         "Makes counter-offers using buyer strategy and optional RAG context",
+>                         List.of("negotiation", "pricing"), List.of(), List.of(), List.of(), List.of())))
+>                 .build();
+>     }
+> 
+>     @Bean
+>     @ConditionalOnProperty(name = "nego.role", havingValue = "seller")
+>     public AgentCard sellerAgentCard(@Value("${server.port:8082}") int port) {
+>         return new AgentCard.Builder()
+>                 .name("NegotiationSellerAgent")
+>                 .description("LLM-powered seller agent for iterative price negotiation")
+>                 .url("http://seller-agent:" + port)
+>                 .provider(new AgentProvider("nego-simulator", "https://github.com/nego-simulator"))
+>                 .version("1.0.0")
+>                 .capabilities(new AgentCapabilities(false, false, false, List.of()))
+>                 .defaultInputModes(List.of("text"))
+>                 .defaultOutputModes(List.of("text"))
+>                 .skills(List.of(new AgentSkill(
+>                         "negotiate_price", "Price Negotiation",
+>                         "Makes counter-offers using seller strategy and optional RAG context",
+>                         List.of("negotiation", "pricing"), List.of(), List.of(), List.of(), List.of())))
+>                 .build();
+>     }
+> 
+>     @Bean
+>     @ConditionalOnProperty(name = "nego.role", havingValue = "orchestrator", matchIfMissing = true)
+>     public AgentCard orchestratorAgentCard(@Value("${server.port:8080}") int port) {
+>         return new AgentCard.Builder()
+>                 .name("NegotiationOrchestrator")
+>                 .description("Orchestrates multi-round price negotiation between buyer and seller agents via A2A protocol")
+>                 .url("http://orchestrator:" + port)
+>                 .provider(new AgentProvider("nego-simulator", "https://github.com/nego-simulator"))
+>                 .version("1.0.0")
+>                 .capabilities(new AgentCapabilities(false, false, false, List.of()))
+>                 .defaultInputModes(List.of("text"))
+>                 .defaultOutputModes(List.of("text"))
+>                 .skills(List.of(new AgentSkill(
+>                         "orchestrate_negotiation", "Negotiation Orchestration",
+>                         "Coordinates buyer-seller negotiation sessions with configurable strategies",
+>                         List.of("orchestration", "negotiation"), List.of(), List.of(), List.of(), List.of())))
+>                 .build();
+>     }
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/a2a/BuyerA2aController.java
+0a1,110
+> package com.nego.simulator.a2a;
+> 
+> import com.fasterxml.jackson.databind.JsonNode;
+> import com.fasterxml.jackson.databind.ObjectMapper;
+> import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+> import io.a2a.server.requesthandlers.RequestHandler;
+> import io.a2a.spec.AgentCard;
+> import io.a2a.spec.CancelTaskRequest;
+> import io.a2a.spec.EventKind;
+> import io.a2a.spec.GetTaskRequest;
+> import io.a2a.spec.JSONRPCError;
+> import io.a2a.spec.SendMessageRequest;
+> import io.a2a.spec.SendStreamingMessageRequest;
+> import io.a2a.server.ServerCallContext;
+> import io.a2a.server.auth.UnauthenticatedUser;
+> import io.a2a.spec.Task;
+> import io.a2a.spec.TaskQueryParams;
+> import io.a2a.spec.TaskIdParams;
+> import io.a2a.spec.MessageSendParams;
+> import org.slf4j.Logger;
+> import org.slf4j.LoggerFactory;
+> import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+> import org.springframework.http.MediaType;
+> import org.springframework.http.ResponseEntity;
+> import org.springframework.web.bind.annotation.*;
+> 
+> import java.util.Map;
+> 
+> @RestController
+> @ConditionalOnProperty(name = "nego.role", havingValue = "buyer")
+> public class BuyerA2aController {
+> 
+>     private static final Logger log = LoggerFactory.getLogger(BuyerA2aController.class);
+> 
+>     private final AgentCard agentCard;
+>     private final RequestHandler requestHandler;
+>     private final ObjectMapper objectMapper;
+> 
+>     public BuyerA2aController(AgentCard agentCard, RequestHandler requestHandler, ObjectMapper objectMapper) {
+>         this.agentCard = agentCard;
+>         this.requestHandler = requestHandler;
+>         this.objectMapper = objectMapper;
+>     }
+> 
+>     @GetMapping("/.well-known/agent-card.json")
+>     public AgentCard getCard() {
+>         return agentCard;
+>     }
+> 
+>     @PostMapping(value = "/a2a", consumes = MediaType.APPLICATION_JSON_VALUE)
+>     public ResponseEntity<?> handleJsonRpc(@RequestBody JsonNode body) {
+>         try {
+>             String method = body.has("method") ? body.get("method").asText() : "";
+>             Object id = body.has("id") ? objectMapper.treeToValue(body.get("id"), Object.class) : null;
+>             JsonNode paramsNode = body.has("params") ? body.get("params") : null;
+> 
+>             ServerCallContext callContext = new ServerCallContext(
+>                     UnauthenticatedUser.INSTANCE, Map.of(), java.util.Set.of());
+> 
+>             switch (method) {
+>                 case "message/send" -> {
+>                     MessageSendParams params = objectMapper.treeToValue(paramsNode, MessageSendParams.class);
+>                     EventKind result = requestHandler.onMessageSend(params, callContext);
+>                     return ResponseEntity.ok(buildResponse(id, result));
+>                 }
+>                 case "tasks/get" -> {
+>                     TaskQueryParams params = objectMapper.treeToValue(paramsNode, TaskQueryParams.class);
+>                     Task result = requestHandler.onGetTask(params, callContext);
+>                     return ResponseEntity.ok(buildResponse(id, result));
+>                 }
+>                 case "tasks/cancel" -> {
+>                     TaskIdParams params = objectMapper.treeToValue(paramsNode, TaskIdParams.class);
+>                     Task result = requestHandler.onCancelTask(params, callContext);
+>                     return ResponseEntity.ok(buildResponse(id, result));
+>                 }
+>                 default -> {
+>                     return ResponseEntity.ok(buildErrorResponse(id,
+>                             new JSONRPCError(-32601, "Method not found: " + method, null)));
+>                 }
+>             }
+>         } catch (JSONRPCError e) {
+>             Object id = body.has("id") ? null : null;
+>             return ResponseEntity.ok(buildErrorResponse(id, e));
+>         } catch (Exception e) {
+>             log.error("Error handling A2A JSON-RPC request", e);
+>             return ResponseEntity.ok(buildErrorResponse(null,
+>                     new JSONRPCError(-32603, "Internal error: " + e.getMessage(), null)));
+>         }
+>     }
+> 
+>     private Map<String, Object> buildResponse(Object id, Object result) {
+>         return Map.of(
+>                 "jsonrpc", "2.0",
+>                 "id", id != null ? id : JsonNodeFactory.instance.nullNode(),
+>                 "result", result
+>         );
+>     }
+> 
+>     private Map<String, Object> buildErrorResponse(Object id, JSONRPCError error) {
+>         return Map.of(
+>                 "jsonrpc", "2.0",
+>                 "id", id != null ? id : JsonNodeFactory.instance.nullNode(),
+>                 "error", Map.of(
+>                         "code", error.getCode(),
+>                         "message", error.getMessage() != null ? error.getMessage() : "",
+>                         "data", error.getData() != null ? error.getData() : JsonNodeFactory.instance.nullNode()
+>                 )
+>         );
+>     }
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/a2a/BuyerA2aServerConfig.java
+0a1,56
+> package com.nego.simulator.a2a;
+> 
+> import io.a2a.server.agentexecution.AgentExecutor;
+> import io.a2a.server.events.InMemoryQueueManager;
+> import io.a2a.server.requesthandlers.DefaultRequestHandler;
+> import io.a2a.server.requesthandlers.RequestHandler;
+> import io.a2a.server.tasks.BasePushNotificationSender;
+> import io.a2a.server.tasks.InMemoryPushNotificationConfigStore;
+> import io.a2a.server.tasks.InMemoryTaskStore;
+> import io.a2a.server.tasks.PushNotificationConfigStore;
+> import io.a2a.server.tasks.PushNotificationSender;
+> import io.a2a.server.tasks.TaskStateProvider;
+> import io.a2a.server.tasks.TaskStore;
+> import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+> import org.springframework.context.annotation.Bean;
+> import org.springframework.context.annotation.Configuration;
+> 
+> import java.util.concurrent.Executor;
+> import java.util.concurrent.Executors;
+> 
+> @Configuration
+> @ConditionalOnProperty(name = "nego.role", havingValue = "buyer")
+> public class BuyerA2aServerConfig {
+> 
+>     @Bean
+>     public InMemoryTaskStore buyerTaskStore() {
+>         return new InMemoryTaskStore();
+>     }
+> 
+>     @Bean
+>     public PushNotificationConfigStore buyerPushConfigStore() {
+>         return new InMemoryPushNotificationConfigStore();
+>     }
+> 
+>     @Bean
+>     public PushNotificationSender buyerPushSender(PushNotificationConfigStore buyerPushConfigStore) {
+>         return new BasePushNotificationSender(buyerPushConfigStore);
+>     }
+> 
+>     @Bean
+>     public InMemoryQueueManager buyerQueueManager(InMemoryTaskStore buyerTaskStore) {
+>         return new InMemoryQueueManager((TaskStateProvider) buyerTaskStore);
+>     }
+> 
+>     @Bean
+>     public RequestHandler buyerRequestHandler(AgentExecutor buyerAgentExecutor,
+>                                                InMemoryTaskStore buyerTaskStore,
+>                                                InMemoryQueueManager buyerQueueManager,
+>                                                PushNotificationConfigStore buyerPushConfigStore,
+>                                                PushNotificationSender buyerPushSender) {
+>         Executor executor = Executors.newCachedThreadPool();
+>         return DefaultRequestHandler.create(
+>                 buyerAgentExecutor, (TaskStore) buyerTaskStore, buyerQueueManager,
+>                 buyerPushConfigStore, buyerPushSender, executor);
+>     }
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/a2a/BuyerAgentExecutor.java
+0a1,104
+> package com.nego.simulator.a2a;
+> 
+> import com.fasterxml.jackson.databind.ObjectMapper;
+> import com.nego.simulator.model.AgentCallRequest;
+> import com.nego.simulator.model.AgentCallResponse;
+> import com.nego.simulator.model.AgentInitRequest;
+> import com.nego.simulator.model.AgentInitResponse;
+> import com.nego.simulator.model.BuyerStrategy;
+> import com.nego.simulator.model.OfferResponse;
+> import com.nego.simulator.service.BuyerAgentService;
+> import io.a2a.server.agentexecution.AgentExecutor;
+> import io.a2a.server.agentexecution.RequestContext;
+> import io.a2a.server.events.EventQueue;
+> import io.a2a.server.tasks.TaskUpdater;
+> import io.a2a.spec.JSONRPCError;
+> import io.a2a.spec.Message;
+> import io.a2a.spec.Part;
+> import io.a2a.spec.TextPart;
+> import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+> import org.springframework.stereotype.Component;
+> 
+> import java.util.List;
+> import java.util.Map;
+> 
+> @Component
+> @ConditionalOnProperty(name = "nego.role", havingValue = "buyer")
+> public class BuyerAgentExecutor implements AgentExecutor {
+> 
+>     private final BuyerAgentService buyerService;
+>     private final ObjectMapper objectMapper;
+> 
+>     public BuyerAgentExecutor(BuyerAgentService buyerService, ObjectMapper objectMapper) {
+>         this.buyerService = buyerService;
+>         this.objectMapper = objectMapper;
+>     }
+> 
+>     @Override
+>     public void execute(RequestContext ctx, EventQueue eventQueue) throws JSONRPCError {
+>         TaskUpdater updater = new TaskUpdater(ctx, eventQueue);
+> 
+>         if (ctx.getTask() == null) {
+>             updater.submit();
+>         }
+>         updater.startWork();
+> 
+>         Message message = ctx.getMessage();
+>         Map<String, Object> meta = message.getMetadata();
+> 
+>         String sessionId = (String) meta.getOrDefault("sessionId", null);
+>         String context = extractText(message);
+>         double opponentOffer = meta.containsKey("opponentOffer")
+>                 ? ((Number) meta.get("opponentOffer")).doubleValue() : 0.0;
+> 
+>         if (sessionId == null || !buyerService.hasSession(sessionId)) {
+>             String strategyName = (String) meta.getOrDefault("strategy", "AGGRESSIVE");
+>             double askingPrice = meta.containsKey("askingPrice")
+>                     ? ((Number) meta.get("askingPrice")).doubleValue() : 100.0;
+> 
+>             AgentInitRequest initReq = AgentInitRequest.builder()
+>                     .strategy(strategyName)
+>                     .askingPrice(askingPrice)
+>                     .build();
+>             AgentInitResponse initResp = buyerService.init(initReq);
+>             sessionId = initResp.getSessionId();
+>         }
+> 
+>         AgentCallRequest callReq = AgentCallRequest.builder()
+>                 .sessionId(sessionId)
+>                 .context(context)
+>                 .opponentLastOffer(opponentOffer)
+>                 .build();
+>         AgentCallResponse callResp = buyerService.call(callReq);
+> 
+>         OfferResponse offer = OfferResponse.builder()
+>                 .text(callResp.getResponse())
+>                 .lastOffer(callResp.getLastOffer())
+>                 .accepted(callResp.isAccepted())
+>                 .violations(callResp.getViolations())
+>                 .build();
+> 
+>         try {
+>             String offerJson = objectMapper.writeValueAsString(offer);
+>             updater.addArtifact(List.of(new TextPart(offerJson)));
+>         } catch (Exception e) {
+>             updater.fail();
+>             return;
+>         }
+> 
+>         updater.complete();
+>     }
+> 
+>     @Override
+>     public void cancel(RequestContext ctx, EventQueue eventQueue) throws JSONRPCError {
+>         TaskUpdater updater = new TaskUpdater(ctx, eventQueue);
+>         updater.cancel();
+>     }
+> 
+>     private String extractText(Message message) {
+>         return message.getParts().stream()
+>                 .filter(p -> p instanceof TextPart)
+>                 .map(p -> ((TextPart) p).getText())
+>                 .findFirst().orElse("");
+>     }
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/a2a/SellerA2aController.java
+0a1,107
+> package com.nego.simulator.a2a;
+> 
+> import com.fasterxml.jackson.databind.JsonNode;
+> import com.fasterxml.jackson.databind.ObjectMapper;
+> import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+> import io.a2a.server.requesthandlers.RequestHandler;
+> import io.a2a.spec.AgentCard;
+> import io.a2a.spec.EventKind;
+> import io.a2a.spec.JSONRPCError;
+> import io.a2a.spec.MessageSendParams;
+> import io.a2a.server.ServerCallContext;
+> import io.a2a.server.auth.UnauthenticatedUser;
+> import io.a2a.spec.Task;
+> import io.a2a.spec.TaskQueryParams;
+> import io.a2a.spec.TaskIdParams;
+> import io.a2a.spec.MessageSendParams;
+> import org.slf4j.Logger;
+> import org.slf4j.LoggerFactory;
+> import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+> import org.springframework.http.MediaType;
+> import org.springframework.http.ResponseEntity;
+> import org.springframework.web.bind.annotation.*;
+> 
+> import java.util.Map;
+> 
+> @RestController
+> @ConditionalOnProperty(name = "nego.role", havingValue = "seller")
+> public class SellerA2aController {
+> 
+>     private static final Logger log = LoggerFactory.getLogger(SellerA2aController.class);
+> 
+>     private final AgentCard agentCard;
+>     private final RequestHandler requestHandler;
+>     private final ObjectMapper objectMapper;
+> 
+>     public SellerA2aController(AgentCard agentCard, RequestHandler requestHandler, ObjectMapper objectMapper) {
+>         this.agentCard = agentCard;
+>         this.requestHandler = requestHandler;
+>         this.objectMapper = objectMapper;
+>     }
+> 
+>     @GetMapping("/.well-known/agent-card.json")
+>     public AgentCard getCard() {
+>         return agentCard;
+>     }
+> 
+>     @PostMapping(value = "/a2a", consumes = MediaType.APPLICATION_JSON_VALUE)
+>     public ResponseEntity<?> handleJsonRpc(@RequestBody JsonNode body) {
+>         try {
+>             String method = body.has("method") ? body.get("method").asText() : "";
+>             Object id = body.has("id") ? objectMapper.treeToValue(body.get("id"), Object.class) : null;
+>             JsonNode paramsNode = body.has("params") ? body.get("params") : null;
+> 
+>             ServerCallContext callContext = new ServerCallContext(
+>                     UnauthenticatedUser.INSTANCE, Map.of(), java.util.Set.of());
+> 
+>             switch (method) {
+>                 case "message/send" -> {
+>                     MessageSendParams params = objectMapper.treeToValue(paramsNode, MessageSendParams.class);
+>                     EventKind result = requestHandler.onMessageSend(params, callContext);
+>                     return ResponseEntity.ok(buildResponse(id, result));
+>                 }
+>                 case "tasks/get" -> {
+>                     TaskQueryParams params = objectMapper.treeToValue(paramsNode, TaskQueryParams.class);
+>                     Task result = requestHandler.onGetTask(params, callContext);
+>                     return ResponseEntity.ok(buildResponse(id, result));
+>                 }
+>                 case "tasks/cancel" -> {
+>                     TaskIdParams params = objectMapper.treeToValue(paramsNode, TaskIdParams.class);
+>                     Task result = requestHandler.onCancelTask(params, callContext);
+>                     return ResponseEntity.ok(buildResponse(id, result));
+>                 }
+>                 default -> {
+>                     return ResponseEntity.ok(buildErrorResponse(id,
+>                             new JSONRPCError(-32601, "Method not found: " + method, null)));
+>                 }
+>             }
+>         } catch (JSONRPCError e) {
+>             Object id = body.has("id") ? null : null;
+>             return ResponseEntity.ok(buildErrorResponse(id, e));
+>         } catch (Exception e) {
+>             log.error("Error handling A2A JSON-RPC request", e);
+>             return ResponseEntity.ok(buildErrorResponse(null,
+>                     new JSONRPCError(-32603, "Internal error: " + e.getMessage(), null)));
+>         }
+>     }
+> 
+>     private Map<String, Object> buildResponse(Object id, Object result) {
+>         return Map.of(
+>                 "jsonrpc", "2.0",
+>                 "id", id != null ? id : JsonNodeFactory.instance.nullNode(),
+>                 "result", result
+>         );
+>     }
+> 
+>     private Map<String, Object> buildErrorResponse(Object id, JSONRPCError error) {
+>         return Map.of(
+>                 "jsonrpc", "2.0",
+>                 "id", id != null ? id : JsonNodeFactory.instance.nullNode(),
+>                 "error", Map.of(
+>                         "code", error.getCode(),
+>                         "message", error.getMessage() != null ? error.getMessage() : "",
+>                         "data", error.getData() != null ? error.getData() : JsonNodeFactory.instance.nullNode()
+>                 )
+>         );
+>     }
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/a2a/SellerA2aServerConfig.java
+0a1,56
+> package com.nego.simulator.a2a;
+> 
+> import io.a2a.server.agentexecution.AgentExecutor;
+> import io.a2a.server.events.InMemoryQueueManager;
+> import io.a2a.server.requesthandlers.DefaultRequestHandler;
+> import io.a2a.server.requesthandlers.RequestHandler;
+> import io.a2a.server.tasks.BasePushNotificationSender;
+> import io.a2a.server.tasks.InMemoryPushNotificationConfigStore;
+> import io.a2a.server.tasks.InMemoryTaskStore;
+> import io.a2a.server.tasks.PushNotificationConfigStore;
+> import io.a2a.server.tasks.PushNotificationSender;
+> import io.a2a.server.tasks.TaskStateProvider;
+> import io.a2a.server.tasks.TaskStore;
+> import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+> import org.springframework.context.annotation.Bean;
+> import org.springframework.context.annotation.Configuration;
+> 
+> import java.util.concurrent.Executor;
+> import java.util.concurrent.Executors;
+> 
+> @Configuration
+> @ConditionalOnProperty(name = "nego.role", havingValue = "seller")
+> public class SellerA2aServerConfig {
+> 
+>     @Bean
+>     public InMemoryTaskStore sellerTaskStore() {
+>         return new InMemoryTaskStore();
+>     }
+> 
+>     @Bean
+>     public PushNotificationConfigStore sellerPushConfigStore() {
+>         return new InMemoryPushNotificationConfigStore();
+>     }
+> 
+>     @Bean
+>     public PushNotificationSender sellerPushSender(PushNotificationConfigStore sellerPushConfigStore) {
+>         return new BasePushNotificationSender(sellerPushConfigStore);
+>     }
+> 
+>     @Bean
+>     public InMemoryQueueManager sellerQueueManager(InMemoryTaskStore sellerTaskStore) {
+>         return new InMemoryQueueManager((TaskStateProvider) sellerTaskStore);
+>     }
+> 
+>     @Bean
+>     public RequestHandler sellerRequestHandler(AgentExecutor sellerAgentExecutor,
+>                                                 InMemoryTaskStore sellerTaskStore,
+>                                                 InMemoryQueueManager sellerQueueManager,
+>                                                 PushNotificationConfigStore sellerPushConfigStore,
+>                                                 PushNotificationSender sellerPushSender) {
+>         Executor executor = Executors.newCachedThreadPool();
+>         return DefaultRequestHandler.create(
+>                 sellerAgentExecutor, (TaskStore) sellerTaskStore, sellerQueueManager,
+>                 sellerPushConfigStore, sellerPushSender, executor);
+>     }
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/a2a/SellerAgentExecutor.java
+0a1,103
+> package com.nego.simulator.a2a;
+> 
+> import com.fasterxml.jackson.databind.ObjectMapper;
+> import com.nego.simulator.model.AgentCallRequest;
+> import com.nego.simulator.model.AgentCallResponse;
+> import com.nego.simulator.model.AgentInitRequest;
+> import com.nego.simulator.model.AgentInitResponse;
+> import com.nego.simulator.model.OfferResponse;
+> import com.nego.simulator.model.SellerStrategy;
+> import com.nego.simulator.service.SellerAgentService;
+> import io.a2a.server.agentexecution.AgentExecutor;
+> import io.a2a.server.agentexecution.RequestContext;
+> import io.a2a.server.events.EventQueue;
+> import io.a2a.server.tasks.TaskUpdater;
+> import io.a2a.spec.JSONRPCError;
+> import io.a2a.spec.Message;
+> import io.a2a.spec.TextPart;
+> import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+> import org.springframework.stereotype.Component;
+> 
+> import java.util.List;
+> import java.util.Map;
+> 
+> @Component
+> @ConditionalOnProperty(name = "nego.role", havingValue = "seller")
+> public class SellerAgentExecutor implements AgentExecutor {
+> 
+>     private final SellerAgentService sellerService;
+>     private final ObjectMapper objectMapper;
+> 
+>     public SellerAgentExecutor(SellerAgentService sellerService, ObjectMapper objectMapper) {
+>         this.sellerService = sellerService;
+>         this.objectMapper = objectMapper;
+>     }
+> 
+>     @Override
+>     public void execute(RequestContext ctx, EventQueue eventQueue) throws JSONRPCError {
+>         TaskUpdater updater = new TaskUpdater(ctx, eventQueue);
+> 
+>         if (ctx.getTask() == null) {
+>             updater.submit();
+>         }
+>         updater.startWork();
+> 
+>         Message message = ctx.getMessage();
+>         Map<String, Object> meta = message.getMetadata();
+> 
+>         String sessionId = (String) meta.getOrDefault("sessionId", null);
+>         String context = extractText(message);
+>         double opponentOffer = meta.containsKey("opponentOffer")
+>                 ? ((Number) meta.get("opponentOffer")).doubleValue() : 0.0;
+> 
+>         if (sessionId == null || !sellerService.hasSession(sessionId)) {
+>             String strategyName = (String) meta.getOrDefault("strategy", "FLEXIBLE");
+>             double askingPrice = meta.containsKey("askingPrice")
+>                     ? ((Number) meta.get("askingPrice")).doubleValue() : 100.0;
+> 
+>             AgentInitRequest initReq = AgentInitRequest.builder()
+>                     .strategy(strategyName)
+>                     .askingPrice(askingPrice)
+>                     .build();
+>             AgentInitResponse initResp = sellerService.init(initReq);
+>             sessionId = initResp.getSessionId();
+>         }
+> 
+>         AgentCallRequest callReq = AgentCallRequest.builder()
+>                 .sessionId(sessionId)
+>                 .context(context)
+>                 .opponentLastOffer(opponentOffer)
+>                 .build();
+>         AgentCallResponse callResp = sellerService.call(callReq);
+> 
+>         OfferResponse offer = OfferResponse.builder()
+>                 .text(callResp.getResponse())
+>                 .lastOffer(callResp.getLastOffer())
+>                 .accepted(callResp.isAccepted())
+>                 .violations(callResp.getViolations())
+>                 .build();
+> 
+>         try {
+>             String offerJson = objectMapper.writeValueAsString(offer);
+>             updater.addArtifact(List.of(new TextPart(offerJson)));
+>         } catch (Exception e) {
+>             updater.fail();
+>             return;
+>         }
+> 
+>         updater.complete();
+>     }
+> 
+>     @Override
+>     public void cancel(RequestContext ctx, EventQueue eventQueue) throws JSONRPCError {
+>         TaskUpdater updater = new TaskUpdater(ctx, eventQueue);
+>         updater.cancel();
+>     }
+> 
+>     private String extractText(Message message) {
+>         return message.getParts().stream()
+>                 .filter(p -> p instanceof TextPart)
+>                 .map(p -> ((TextPart) p).getText())
+>                 .findFirst().orElse("");
+>     }
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/config/RedisConfig.java
+0a1,48
+> package com.nego.simulator.config;
+> 
+> import com.fasterxml.jackson.databind.ObjectMapper;
+> import com.fasterxml.jackson.databind.SerializationFeature;
+> import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+> import org.springframework.context.annotation.Bean;
+> import org.springframework.context.annotation.Configuration;
+> import org.springframework.data.redis.connection.RedisConnectionFactory;
+> import org.springframework.data.redis.core.RedisTemplate;
+> import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
+> import org.springframework.data.redis.serializer.StringRedisSerializer;
+> 
+> /**
+>  * Redis 配置类。
+>  *
+>  * <p>配置 RedisTemplate 使用 JSON 序列化，确保：</p>
+>  * <ul>
+>  *     <li>Key 使用 String 序列化，可读性好</li>
+>  *     <li>Value 使用 Jackson JSON 序列化，支持 LocalDateTime 等类型</li>
+>  *     <li>存入 Redis 的数据可以直接通过 redis-cli 查看和调试</li>
+>  * </ul>
+>  */
+> @Configuration
+> public class RedisConfig {
+> 
+>     @Bean
+>     public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory connectionFactory) {
+>         RedisTemplate<String, Object> template = new RedisTemplate<>();
+>         template.setConnectionFactory(connectionFactory);
+> 
+>         // Key 序列化：String
+>         StringRedisSerializer stringSerializer = new StringRedisSerializer();
+>         template.setKeySerializer(stringSerializer);
+>         template.setHashKeySerializer(stringSerializer);
+> 
+>         // Value 序列化：JSON（支持 LocalDateTime）
+>         ObjectMapper mapper = new ObjectMapper();
+>         mapper.registerModule(new JavaTimeModule());
+>         mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+>         GenericJackson2JsonRedisSerializer jsonSerializer = new GenericJackson2JsonRedisSerializer(mapper);
+> 
+>         template.setValueSerializer(jsonSerializer);
+>         template.setHashValueSerializer(jsonSerializer);
+> 
+>         template.afterPropertiesSet();
+>         return template;
+>     }
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/config/TracingConfig.java
+0a1,32
+> package com.nego.simulator.config;
+> 
+> import io.opentelemetry.api.OpenTelemetry;
+> import io.opentelemetry.api.trace.Tracer;
+> import org.springframework.context.annotation.Bean;
+> import org.springframework.context.annotation.Configuration;
+> 
+> /**
+>  * OpenTelemetry 追踪配置。
+>  *
+>  * <p>
+>  * 通过 opentelemetry-spring-boot-starter 自动装配的 {@link OpenTelemetry} 实例，
+>  * 暴露一个命名为 "negotiation-simulator" 的 {@link Tracer} Bean，
+>  * 供业务层手动埋点使用。
+>  * </p>
+>  */
+> @Configuration
+> public class TracingConfig {
+> 
+>     /**
+>      * 创建全局 Tracer。
+>      *
+>      * <p>
+>      * instrumentation-scope-name 设为服务名称，与 Jaeger 中的 service name 对应，
+>      * 方便按服务名过滤 trace。
+>      * </p>
+>      */
+>     @Bean
+>     public Tracer negotiationTracer(OpenTelemetry openTelemetry) {
+>         return openTelemetry.getTracer("negotiation-simulator", "0.0.1");
+>     }
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/model/AnomalyRecord.java
+0a1,19
+> package com.nego.simulator.model;
+> 
+> import lombok.AllArgsConstructor;
+> import lombok.Builder;
+> import lombok.Data;
+> import lombok.NoArgsConstructor;
+> 
+> @Data
+> @Builder
+> @NoArgsConstructor
+> @AllArgsConstructor
+> public class AnomalyRecord {
+>     private AnomalyType type;
+>     private String description;
+>     private Integer round; // 发生异常时的轮次
+>     private Double relevantPrice; // 相关的异常报价
+>     private String negotiationId; // 追踪是哪场谈判发生的异常
+>     private String timestamp; // 发生异常的时间戳
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/model/AnomalyType.java
+0a1,8
+> package com.nego.simulator.model;
+> 
+> public enum AnomalyType {
+>     OVERPAYMENT, // 超额支付（收敛中间价超出任一方策略设定的硬边界）
+>     CONSTRAINT_VIOLATION, // 约束违规 （试图突破硬边界，被Guardrail拦截）
+>     DEADLOCK // 谈判僵局（达到最大轮数未成交）
+> 
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/model/OfferResponse.java
+0a1,36
+> package com.nego.simulator.model;
+> 
+> import lombok.AllArgsConstructor;
+> import lombok.Builder;
+> import lombok.Data;
+> import lombok.NoArgsConstructor;
+> 
+> import java.util.List;
+> 
+> /**
+>  * AgentTransport 每次调用的结构化返回值。
+>  *
+>  * <p>将原来散落在 Transport 各字段（lastOffer、accepted）的状态
+>  * 收拢成一个不可变的结果对象，配合 CompletableFuture 使用。</p>
+>  *
+>  * <p>这样 Phase 2 sealed-bid 协议可以并发调用 Buyer/Seller，
+>  * 用 CompletableFuture.allOf() 等待双方报价，无需改接口。</p>
+>  */
+> @Data
+> @Builder
+> @NoArgsConstructor
+> @AllArgsConstructor
+> public class OfferResponse {
+> 
+>     /** LLM 回复的原始文本 */
+>     private String text;
+> 
+>     /** 本轮报价金额（由 Tools 层写入，防作弊保证） */
+>     private double lastOffer;
+> 
+>     /** 是否已接受对方报价（达成成交） */
+>     private boolean accepted;
+> 
+>     /** 本次调用中 Tools 层检测到的约束违规（可为空列表） */
+>     private List<AnomalyRecord> violations;
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/model/RagMode.java
+0a1,11
+> package com.nego.simulator.model;
+> 
+> /**
+>  * 实验的RAG策略模式
+>  */
+> public enum RagMode {
+>     NONE, // 都不用RAG
+>     BOTH, // 双方都用
+>     BUYER_ONLY, // 仅买方用
+>     SELLER_ONLY // 仅卖方用
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/service/A2aHttpTransport.java
+0a1,236
+> package com.nego.simulator.service;
+> 
+> import com.fasterxml.jackson.databind.ObjectMapper;
+> import com.nego.simulator.model.AnomalyRecord;
+> import com.nego.simulator.model.BuyerStrategy;
+> import com.nego.simulator.model.OfferResponse;
+> import com.nego.simulator.model.SellerStrategy;
+> import io.a2a.client.Client;
+> import io.a2a.client.ClientEvent;
+> import io.a2a.client.TaskEvent;
+> import io.a2a.client.TaskUpdateEvent;
+> import io.a2a.client.http.A2ACardResolver;
+> import io.a2a.client.transport.jsonrpc.JSONRPCTransport;
+> import io.a2a.client.transport.jsonrpc.JSONRPCTransportConfigBuilder;
+> import io.a2a.spec.AgentCard;
+> import io.a2a.spec.Artifact;
+> import io.a2a.spec.Message;
+> import io.a2a.spec.Part;
+> import io.a2a.spec.Task;
+> import io.a2a.spec.TaskState;
+> import io.a2a.spec.TextPart;
+> import io.a2a.spec.UpdateEvent;
+> import io.a2a.spec.TaskArtifactUpdateEvent;
+> import io.a2a.spec.TaskStatusUpdateEvent;
+> 
+> import java.util.ArrayList;
+> import java.util.List;
+> import java.util.Map;
+> import java.util.UUID;
+> import java.util.concurrent.CompletableFuture;
+> 
+> public class A2aHttpTransport implements AgentTransport {
+> 
+>     private final Client buyerClient;
+>     private final Client sellerClient;
+>     private final String buyerSessionId;
+>     private final String sellerSessionId;
+>     private final ObjectMapper objectMapper;
+> 
+>     private double opponentOfferForBuyer;
+>     private double opponentOfferForSeller;
+> 
+>     private final BuyerStrategy buyerStrategy;
+>     private final SellerStrategy sellerStrategy;
+>     private final double askingPrice;
+>     private boolean buyerInitialized = false;
+>     private boolean sellerInitialized = false;
+> 
+>     private final List<AnomalyRecord> buyerViolations = new ArrayList<>();
+>     private final List<AnomalyRecord> sellerViolations = new ArrayList<>();
+> 
+>     public A2aHttpTransport(String buyerBaseUrl, String sellerBaseUrl,
+>                             BuyerStrategy buyerStrategy, SellerStrategy sellerStrategy,
+>                             double askingPrice, ObjectMapper objectMapper) {
+>         this.objectMapper = objectMapper;
+> 
+>         try {
+>             A2ACardResolver buyerResolver = new A2ACardResolver(buyerBaseUrl);
+>             AgentCard buyerCard = buyerResolver.getAgentCard();
+>             this.buyerClient = Client.builder(buyerCard)
+>                     .withTransport(JSONRPCTransport.class, new JSONRPCTransportConfigBuilder())
+>                     .build();
+> 
+>             A2ACardResolver sellerResolver = new A2ACardResolver(sellerBaseUrl);
+>             AgentCard sellerCard = sellerResolver.getAgentCard();
+>             this.sellerClient = Client.builder(sellerCard)
+>                     .withTransport(JSONRPCTransport.class, new JSONRPCTransportConfigBuilder())
+>                     .build();
+>         } catch (Exception e) {
+>             throw new RuntimeException("Failed to initialize A2A clients: " + e.getMessage(), e);
+>         }
+> 
+>         this.buyerSessionId = UUID.randomUUID().toString();
+>         this.sellerSessionId = UUID.randomUUID().toString();
+>         this.buyerStrategy = buyerStrategy;
+>         this.sellerStrategy = sellerStrategy;
+>         this.askingPrice = askingPrice;
+>     }
+> 
+>     @Override
+>     public CompletableFuture<OfferResponse> sendToBuyer(String context) {
+>         Map<String, Object> metadata = new java.util.HashMap<>();
+>         metadata.put("sessionId", buyerSessionId);
+>         metadata.put("opponentOffer", opponentOfferForBuyer);
+>         if (!buyerInitialized) {
+>             metadata.put("strategy", buyerStrategy.name());
+>             metadata.put("askingPrice", askingPrice);
+>             buyerInitialized = true;
+>         }
+> 
+>         Message msg = new Message(
+>                 Message.Role.USER,
+>                 List.of(new TextPart(context)),
+>                 null, null, null,
+>                 List.of(),
+>                 metadata,
+>                 List.of()
+>         );
+> 
+>         CompletableFuture<OfferResponse> future = new CompletableFuture<>();
+> 
+>         try {
+>             buyerClient.sendMessage(msg,
+>                     List.of((event, card) -> {
+>                         if (event instanceof TaskEvent te) {
+>                             Task task = te.getTask();
+>                             if (task.getStatus().state() == TaskState.COMPLETED) {
+>                                 try {
+>                                     OfferResponse offer = extractBuyerOfferFromTask(task);
+>                                     future.complete(offer);
+>                                 } catch (Exception e) {
+>                                     future.completeExceptionally(e);
+>                                 }
+>                             } else if (task.getStatus().state() == TaskState.FAILED) {
+>                                 future.completeExceptionally(
+>                                         new RuntimeException("Buyer agent task failed"));
+>                             }
+>                         }
+>                     }),
+>                     err -> future.completeExceptionally(err),
+>                     null
+>             );
+>         } catch (Exception e) {
+>             future.completeExceptionally(e);
+>         }
+> 
+>         return future;
+>     }
+> 
+>     @Override
+>     public CompletableFuture<OfferResponse> sendToSeller(String context) {
+>         Map<String, Object> metadata = new java.util.HashMap<>();
+>         metadata.put("sessionId", sellerSessionId);
+>         metadata.put("opponentOffer", opponentOfferForSeller);
+>         if (!sellerInitialized) {
+>             metadata.put("strategy", sellerStrategy.name());
+>             metadata.put("askingPrice", askingPrice);
+>             sellerInitialized = true;
+>         }
+> 
+>         Message msg = new Message(
+>                 Message.Role.USER,
+>                 List.of(new TextPart(context)),
+>                 null, null, null,
+>                 List.of(),
+>                 metadata,
+>                 List.of()
+>         );
+> 
+>         CompletableFuture<OfferResponse> future = new CompletableFuture<>();
+> 
+>         try {
+>             sellerClient.sendMessage(msg,
+>                     List.of((event, card) -> {
+>                         if (event instanceof TaskEvent te) {
+>                             Task task = te.getTask();
+>                             if (task.getStatus().state() == TaskState.COMPLETED) {
+>                                 try {
+>                                     OfferResponse offer = extractSellerOfferFromTask(task);
+>                                     future.complete(offer);
+>                                 } catch (Exception e) {
+>                                     future.completeExceptionally(e);
+>                                 }
+>                             } else if (task.getStatus().state() == TaskState.FAILED) {
+>                                 future.completeExceptionally(
+>                                         new RuntimeException("Seller agent task failed"));
+>                             }
+>                         }
+>                     }),
+>                     err -> future.completeExceptionally(err),
+>                     null
+>             );
+>         } catch (Exception e) {
+>             future.completeExceptionally(e);
+>         }
+> 
+>         return future;
+>     }
+> 
+>     private OfferResponse extractBuyerOfferFromTask(Task task) throws Exception {
+>         OfferResponse offer = extractOfferFromTask(task);
+>         if (offer.getViolations() != null) {
+>             buyerViolations.addAll(offer.getViolations());
+>         }
+>         return offer;
+>     }
+> 
+>     private OfferResponse extractSellerOfferFromTask(Task task) throws Exception {
+>         OfferResponse offer = extractOfferFromTask(task);
+>         if (offer.getViolations() != null) {
+>             sellerViolations.addAll(offer.getViolations());
+>         }
+>         return offer;
+>     }
+> 
+>     private OfferResponse extractOfferFromTask(Task task) throws Exception {
+>         if (task.getArtifacts() == null || task.getArtifacts().isEmpty()) {
+>             throw new RuntimeException("No artifacts in completed task");
+>         }
+>         Artifact artifact = task.getArtifacts().get(0);
+>         String json = artifact.parts().stream()
+>                 .filter(p -> p instanceof TextPart)
+>                 .map(p -> ((TextPart) p).getText())
+>                 .findFirst()
+>                 .orElseThrow(() -> new RuntimeException("No text part in artifact"));
+> 
+>         OfferResponse offer = objectMapper.readValue(json, OfferResponse.class);
+>         return offer;
+>     }
+> 
+>     @Override
+>     public void setOpponentOfferForBuyer(double sellerPrice) {
+>         this.opponentOfferForBuyer = sellerPrice;
+>     }
+> 
+>     @Override
+>     public void setOpponentOfferForSeller(double buyerPrice) {
+>         this.opponentOfferForSeller = buyerPrice;
+>     }
+> 
+>     @Override
+>     public List<AnomalyRecord> getBuyerViolations() {
+>         return buyerViolations;
+>     }
+> 
+>     @Override
+>     public List<AnomalyRecord> getSellerViolations() {
+>         return sellerViolations;
+>     }
+> 
+>     @Override
+>     public void close() {
+>         try { buyerClient.close(); } catch (Exception ignored) {}
+>         try { sellerClient.close(); } catch (Exception ignored) {}
+>     }
+> }
+--- /dev/null
++++ b/src/main/java/com/nego/simulator/service/NegotiationService.java.bak
+0a1,582
+> package com.nego.simulator.service;
+> 
+> import java.time.LocalDateTime;
+> import java.util.*;
+> import java.util.stream.Collectors;
+> 
+> import com.nego.simulator.agent.BuyerAgent;
+> import com.nego.simulator.agent.BuyerTools;
+> import com.nego.simulator.agent.SellerAgent;
+> import com.nego.simulator.agent.SellerTools;
+> import com.nego.simulator.model.*;
+> import dev.langchain4j.model.chat.ChatLanguageModel;
+> import dev.langchain4j.service.AiServices;
+> import io.opentelemetry.api.trace.Span;
+> import io.opentelemetry.api.trace.StatusCode;
+> import io.opentelemetry.api.trace.Tracer;
+> import io.opentelemetry.context.Scope;
+> import org.springframework.stereotype.Service;
+> 
+> /**
+>  * 谈判主流程 Service。
+>  *
+>  * <p>
+>  * Phase 6 改造说明：
+>  * </p>
+>  * <ul>
+>  * <li>商品数据从硬编码列表 → Redis Hash，由 RedisProductRepository 管理</li>
+>  * <li>历史记录从内存 ArrayList → Redis List，由 RedisHistoryRepository 管理</li>
+>  * <li>每场谈判赋予唯一 negotiationId，逐轮消息单独存储以支持回放</li>
+>  * </ul>
+>  */
+> @Service
+> public class NegotiationService {
+> 
+>     private final ChatLanguageModel chatLanguageModel;
+> 
+>     // Phase 6：替换原来的内存 services 列表，改由 Redis Hash 管理
+>     private final RedisProductRepository productRepository;
+> 
+>     // 策略知识库服务
+>     private final StrategyKnowledgeService strategyKnowledgeService;
+> 
+>     // Phase 6：替换原来的内存 history 列表，改由 Redis List 管理
+>     private final RedisHistoryRepository historyRepository;
+> 
+>     // Phase 0.1：OpenTelemetry Tracer，用于手动埋点业务 Span
+>     private final Tracer tracer;
+> 
+>     public NegotiationService(ChatLanguageModel chatLanguageModel,
+>             RedisProductRepository productRepository,
+>             RedisHistoryRepository historyRepository,
+>             StrategyKnowledgeService strategyKnowledgeService,
+>             Tracer tracer) {
+>         this.chatLanguageModel = chatLanguageModel;
+>         this.productRepository = productRepository;
+>         this.historyRepository = historyRepository;
+>         this.strategyKnowledgeService = strategyKnowledgeService;
+>         this.tracer = tracer;
+>     }
+> 
+>     /**
+>      * 获取商品列表。
+>      * Phase 6：从 Redis 读取，不再返回硬编码列表。
+>      */
+>     public List<ServiceInfo> getServices() {
+>         return productRepository.findAll();
+>     }
+> 
+>     /**
+>      * 获取历史谈判记录。
+>      * Phase 6：从 Redis    public NegotiationResult negotiate(String serviceId, NegotiationConfig config) {
+>         // Phase 0.1: root span —— 一次完整谈判会话
+>         Span sessionSpan = tracer.spanBuilder("negotiation.session")
+>                 .setAttribute("service.id", serviceId)
+>                 .setAttribute("rag.mode", config.getRagMode() != null ? config.getRagMode().name() : "NONE")
+>                 .setAttribute("buyer.strategy", config.getBuyerStrategy().name())
+>                 .setAttribute("seller.strategy", config.getSellerStrategy().name())
+>                 .startSpan();
+>         try (Scope ignored = sessionSpan.makeCurrent()) {
+> 
+>             // 1. 从 Redis 查找商品，找不到则抛异常
+>             ServiceInfo service = productRepository.findById(serviceId)
+>                     .orElseThrow(() -> new RuntimeException("商品不存在：" + serviceId));
+> 
+>             // 2. 填充默认值（前端可以不传，Service 层岜底）
+>             int maxRounds = config.getMaxRounds() != null ? config.getMaxRounds() : 8;
+>             double threshold = config.getConvergenceThreshold() != null ? config.getConvergenceThreshold() : 0.03;
+> 
+>             // 3. 初始化有状态的 Tools（每场谈判全新实例，避免状态污染）
+>             BuyerTools buyerTools = new BuyerTools(config.getBuyerStrategy(), service.getAskingPrice());
+>             SellerTools sellerTools = new SellerTools(config.getSellerStrategy(), service.getAskingPrice());
+> 
+>             // 4. 动态创建 Agent（绑定 LLM + Tools）
+>             BuyerAgent buyerAgent = AiServices.builder(BuyerAgent.class)
+>                     .chatLanguageModel(chatLanguageModel)
+>                     .tools(buyerTools)
+>                     .build();
+> 
+>             SellerAgent sellerAgent = AiServices.builder(SellerAgent.class)
+>                     .chatLanguageModel(chatLanguageModel)
+>                     .tools(sellerTools)
+>                     .build();
+> 
+>             // 5. 执行多轮谈判主循环
+>             List<AnomalyRecord> anomalies = new ArrayList<>();
+>             NegotiationResult result = runNegotiationLoop(
+>                     service, config, buyerAgent, sellerAgent,
+>                     buyerTools, sellerTools, maxRounds, threshold, anomalies);
+> 
+>             // 6. 收集 Tools 的 Constraint Violation
+>             anomalies.addAll(buyerTools.getViolations());
+>             anomalies.addAll(sellerTools.getViolations());
+> 
+>             // 7. 设置 anomalies 到 result
+>             result.setAnomalyRecords(anomalies);
+> 
+>             // 8. 生成唯一 negotiationId，持久化谈判结果和逐轮消息到 Redis
+>             String negotiationId = UUID.randomUUID().toString();
+>             sessionSpan.setAttribute("negotiation.id", negotiationId);
+>             sessionSpan.setAttribute("negotiation.agreed", Boolean.TRUE.equals(result.getAgreed()));
+>             sessionSpan.setAttribute("negotiation.rounds", result.getRounds());
+> 
+>             String now = java.time.LocalDateTime.now().toString();
+>             for (AnomalyRecord r : anomalies) {
+>                 r.setNegotiationId(negotiationId);
+>                 r.setTimestamp(now);
+>             }
+>             historyRepository.saveAnomalies(anomalies);
+>             historyRepository.saveResult(result);
+>             historyRepository.saveMessages(negotiationId, result.getMessages());
+> 
+>             if (Boolean.TRUE.equals(result.getAgreed())) {
+>                 logSettlement(result, service);
+>             }
+>             return result;
+> 
+>         } catch (Exception e) {
+>             sessionSpan.setStatus(StatusCode.ERROR, e.getMessage());
+>             throw e;
+>         } finally {
+>             sessionSpan.end();
+>         }
+>     }�独持久化异常信息，用作安全分析大盘
+>         String now = java.time.LocalDateTime.now().toString();
+>         for (AnomalyRecord r : anomalies) {
+>             r.setNegotiationId(negotiationId);
+>             r.setTimestamp(now);
+>         }
+>         historyRepository.saveAnomalies(anomalies);
+> 
+>         historyRepository.saveResult(result);
+>         historyRepository.saveMessages(negotiationId, result.getMessages());
+> 
+>         // 7. 如果成交，打印模拟结算日志
+>         if (Boolean.TRUE.equals(result.getAgreed())) {
+>             logSettlement(result, service);
+>         }
+>         return result;
+>     }
+> 
+>     /**
+>      * 核心：多轮谈判循环。
+>      *
+>      * <p>
+>      * 每一轮：买方先出价（或接受/拒绝）→ 卖方再出价（或接受/拒绝）→ 判断收敛。
+>      * </p>
+>      * <p>
+>      * 循环结束条件：任意一方接受、价格收敛（差距 < threshold）、或达到 maxRounds。
+>      * </p>
+>      */
+>     private NegotiationResult runNegotiationLoop(
+>             ServiceInfo service, NegotiationConfig config,
+>             BuyerAgent buyerAgent, SellerAgent sellerAgent,
+>             BuyerTools buyerTools, SellerTools sellerTools,
+>             int maxRounds, double threshold,
+>             List<AnomalyRecord> anomalies) {
+> 
+>         List<NegotiationMessage> messages = new ArrayList<>();
+>         double buyerPrice = 0;
+>         double sellerPrice = service.getAskingPrice();
+> 
+>         for (int round = 1; round <= maxRounds; round++) {
+> 
+>             // Phase 0.1: per-round span
+>             Span roundSpan = tracer.spanBuilder("negotiation.round")
+>                     .setAttribute("round", round)
+>                     .startSpan();
+>             try (Scope roundScope = roundSpan.makeCurrent()) {
+> 
+>             buyerTools.setOpponentLastOffer(sellerPrice);
+>             // —— 买方回合 ——
+>             String buyerContext = buildBuyerContext(service, config.getBuyerStrategy(),
+>                     round, maxRounds, buyerPrice, sellerPrice);
+> 
+>             String buyerRagQuery = null;
+>             String buyerRagContext = null;
+>             if (config.getRagMode() == RagMode.BOTH || config.getRagMode() == RagMode.BUYER_ONLY) {
+>                 String situation = String.format("作为买方，第%d轮谈判，对方上一轮出价$%.2f，我方上一轮出价$%.2f，商品要价$%.2f",
+>                         round, sellerPrice, buyerPrice, service.getAskingPrice());
+>                 // Phase 0.1: RAG 检索 span
+>                 Span ragSpan = tracer.spanBuilder("rag.search")
+>                         .setAttribute("role", "BUYER")
+>                         .setAttribute("round", round)
+>                         .startSpan();
+>                 try (Scope ragScope = ragSpan.makeCurrent()) {
+>                     StrategyKnowledgeService.RagResult ragResult = strategyKnowledgeService.searchStrategy(situation);
+>                     buyerRagQuery = ragResult.rewrittenQuery;
+>                     buyerRagContext = ragResult.advice;
+>                 } finally {
+>                     ragSpan.end();
+>                 }
+>                 buyerContext += "\n[相关策略]\n" + buyerRagContext;
+>             }
+> 
+>             // Phase 0.1: buyer agent call span
+>             Span buyerCallSpan = tracer.spanBuilder("agent.buyer.call")
+>                     .setAttribute("round", round)
+>                     .startSpan();
+>             String buyerResponse;
+>             try (Scope buyerScope = buyerCallSpan.makeCurrent()) {
+>                 buyerResponse = buyerAgent.negotiate(buyerContext);
+>             } finally {
+>                 buyerCallSpan.end();
+>             }
+>             // 从 Tool 的结构化记录中直接取价格，不解析自然语言文本
+>             buyerPrice = buyerTools.getLastOffer();
+>             roundSpan.setAttribute("buyer.price", buyerPrice);
+> 
+>             messages.add(NegotiationMessage.builder()
+>                     .role("BUYER")
+>                     .content(buyerResponse)
+>                     .price(buyerPrice)
+>                     .round(round)
+>                     .ragQuery(buyerRagQuery)
+>                     .ragContext(buyerRagContext)
+>                     .timestamp(LocalDateTime.now())
+>                     .build());
+> 
+>             // 买方直接接受对方报价
+>             if (buyerTools.isAccepted()) {
+>                 roundSpan.setAttribute("outcome", "buyer.accepted");
+>                 roundSpan.end();
+>                 return buildResult(true, buyerPrice, service, messages, round, config);
+>             }
+> 
+>             sellerTools.setOpponentLastOffer(buyerPrice);
+>             // —— 卖方回合 ——
+>             String sellerContext = buildSellerContext(service, config.getSellerStrategy(),
+>                     round, maxRounds, sellerPrice, buyerPrice);
+> 
+>             String sellerRagQuery = null;
+>             String sellerRagContext = null;
+>             if (config.getRagMode() == RagMode.BOTH || config.getRagMode() == RagMode.SELLER_ONLY) {
+>                 String situation = String.format("作为卖方，第%d轮谈判，对方上一轮出价$%.2f，我方上一轮报价$%.2f，商品要价$%.2f",
+>                         round, buyerPrice, sellerPrice, service.getAskingPrice());
+>                 // Phase 0.1: RAG 检索 span
+>                 Span ragSpan = tracer.spanBuilder("rag.search")
+>                         .setAttribute("role", "SELLER")
+>                         .setAttribute("round", round)
+>                         .startSpan();
+>                 try (Scope ragScope = ragSpan.makeCurrent()) {
+>                     StrategyKnowledgeService.RagResult ragResult = strategyKnowledgeService.searchStrategy(situation);
+>                     sellerRagQuery = ragResult.rewrittenQuery;
+>                     sellerRagContext = ragResult.advice;
+>                 } finally {
+>                     ragSpan.end();
+>                 }
+>                 sellerContext += "\n[相关策略]\n" + sellerRagContext;
+>             }
+> 
+>             // Phase 0.1: seller agent call span
+>             Span sellerCallSpan = tracer.spanBuilder("agent.seller.call")
+>                     .setAttribute("round", round)
+>                     .startSpan();
+>             String sellerResponse;
+>             try (Scope sellerScope = sellerCallSpan.makeCurrent()) {
+>                 sellerResponse = sellerAgent.negotiate(sellerContext);
+>             } finally {
+>                 sellerCallSpan.end();
+>             }
+>             sellerPrice = sellerTools.getLastOffer();
+>             roundSpan.setAttribute("seller.price", sellerPrice);
+> 
+>             messages.add(NegotiationMessage.builder()
+>                     .role("SELLER")
+>                     .content(sellerResponse)
+>                     .price(sellerPrice)
+>                     .round(round)
+>                     .ragQuery(sellerRagQuery)
+>                     .ragContext(sellerRagContext)
+>                     .timestamp(LocalDateTime.now())
+>                     .build());
+> 
+>             // 卖方直接接受买方报价
+>             if (sellerTools.isAccepted()) {
+>                 roundSpan.setAttribute("outcome", "seller.accepted");
+>                 roundSpan.end();
+>                 return buildResult(true, sellerPrice, service, messages, round, config);
+>             }
+> 
+>             } finally {
+>                 roundSpan.end();
+>             }
+> 
+>             // —— 收敛判断 ——
+>             // 双方价格差距缩小到 threshold（默认5%）以内，按中间价自动成交
+>             if (isConverged(buyerPrice, sellerPrice, threshold)) {
+>                 double midPrice = (buyerPrice + sellerPrice) / 2;
+> 
+>                 // 真正的 OVERPAYMENT 检测：收敛中间价突破理论边界
+>                 double buyerCeiling = service.getAskingPrice() * config.getBuyerStrategy().getCeiling();
+>                 double sellerFloor = service.getAskingPrice() * config.getSellerStrategy().getFloor();
+> 
+>                 if (midPrice > buyerCeiling) {
+>                     anomalies.add(AnomalyRecord.builder()
+>                             .type(AnomalyType.OVERPAYMENT)
+>                             .description("收敛中间价 $" + midPrice + " 超过买方预算上限 $" + buyerCeiling)
+>                             .round(round)
+>                             .relevantPrice(midPrice)
+>                             .build());
+>                 }
+>                 if (midPrice < sellerFloor) {
+>                     anomalies.add(AnomalyRecord.builder()
+>                             .type(AnomalyType.OVERPAYMENT)
+>                             .description("收敛中间价 $" + midPrice + " 低于卖方底线 $" + sellerFloor)
+>                             .round(round)
+>                             .relevantPrice(midPrice)
+>                             .build());
+>                 }
+> 
+>                 return buildResult(true, midPrice, service, messages, round, config);
+>             }
+>         }
+> 
+>         // 超过最大轮数，判定为 DEADLOCK
+>         anomalies.add(AnomalyRecord.builder()
+>                 .type(AnomalyType.DEADLOCK)
+>                 .description("达到最大轮数未能收敛，谈判陷入僵局")
+>                 .round(maxRounds)
+>                 .build());
+> 
+>         // 超过最大轮数，谈判失败
+>         return buildResult(false, 0, service, messages, maxRounds, config);
+>     }
+> 
+>     /**
+>      * 构建买方每轮输入上下文。
+>      *
+>      * <p>
+>      * 使用固定模板格式，避免 Prompt 漂移导致模型行为不稳定。
+>      * 明确告诉模型：商品信息、当前轮次、策略参数、我方和对方上一轮出价。
+>      * </p>
+>      */
+>     private String buildBuyerContext(ServiceInfo service, BuyerStrategy strategy,
+>             int round, int maxRounds,
+>             double myLastOffer, double opponentLastOffer) {
+>         return String.format("""
+>                 [谈判状态]
+>                 商品：%s
+>                 商品描述：%s
+>                 原始要价：$%.2f
+>                 当前轮次：第 %d 轮 / 共 %d 轮
+>                 你的策略：%s（首轮%.0f%%，每轮加%.0f%%-%.0f%%，预算上限%.0f%%）
+>                 你上一轮出价：%s
+>                 对方上一轮出价：%s
+>                 请做出你的下一步谈判动作。
+>                 """,
+>                 service.getName(),
+>                 service.getDescription(),
+>                 service.getAskingPrice(),
+>                 round, maxRounds,
+>                 strategy.getDescription(),
+>                 strategy.getOpenRatio() * 100,
+>                 strategy.getMinStep() * 100,
+>                 strategy.getMaxStep() * 100,
+>                 strategy.getCeiling() * 100,
+>                 myLastOffer > 0 ? String.format("$%.2f", myLastOffer) : "尚未出价",
+>                 opponentLastOffer > 0 ? String.format("$%.2f", opponentLastOffer) : "尚未出价");
+>     }
+> 
+>     /**
+>      * 构建卖方每轮输入上下文。
+>      *
+>      * <p>
+>      * 和买方上下文结构相同，区别在于策略参数（降价步骤/底线）和措辞。
+>      * </p>
+>      */
+>     private String buildSellerContext(ServiceInfo service, SellerStrategy strategy,
+>             int round, int maxRounds,
+>             double myLastOffer, double opponentLastOffer) {
+>         return String.format("""
+>                 [谈判状态]
+>                 商品：%s
+>                 商品描述：%s
+>                 原始要价：$%.2f
+>                 当前轮次：第 %d 轮 / 共 %d 轮
+>                 你的策略：%s（首轮%.0f%%，每轮降%.0f%%-%.0f%%，底线%.0f%%）
+>                 你上一轮报价：%s
+>                 对方上一轮出价：%s
+>                 请做出你的下一步谈判动作。
+>                 """,
+>                 service.getName(),
+>                 service.getDescription(),
+>                 service.getAskingPrice(),
+>                 round, maxRounds,
+>                 strategy.getDescription(),
+>                 strategy.getOpenRatio() * 100,
+>                 strategy.getMinStep() * 100,
+>                 strategy.getMaxStep() * 100,
+>                 strategy.getFloor() * 100,
+>                 myLastOffer > 0 ? String.format("$%.2f", myLastOffer) : "尚未报价",
+>                 opponentLastOffer > 0 ? String.format("$%.2f", opponentLastOffer) : "尚未出价");
+>     }
+> 
+>     /**
+>      * 判断双方价格是否已经收敛。
+>      *
+>      * <p>
+>      * 收敛条件：|卖方价格 - 买方价格| / 卖方价格 <= threshold
+>      * </p>
+>      * <p>
+>      * 使用相对差距而不是绝对差距，是为了在不同价格量级的商品上表现一致。
+>      * </p>
+>      */
+>     private boolean isConverged(double buyerPrice, double sellerPrice, double threshold) {
+>         if (buyerPrice <= 0 || sellerPrice <= 0) {
+>             return false;
+>         }
+>         double gap = Math.abs(sellerPrice - buyerPrice) / sellerPrice;
+>         return gap <= threshold;
+>     }
+> 
+>     /**
+>      * 构建谈判最终结果对象。
+>      *
+>      * <p>
+>      * 包含：是否成交、最终价格、折扣率、轮数、消息列表、双方满意度、策略信息。
+>      * </p>
+>      */
+>     private NegotiationResult buildResult(boolean agreed, double finalPrice,
+>             ServiceInfo service,
+>             List<NegotiationMessage> messages,
+>             int rounds, NegotiationConfig config) {
+>         double originalPrice = service.getAskingPrice();
+>         double discount = agreed ? (originalPrice - finalPrice) / originalPrice : 0;
+> 
+>         return NegotiationResult.builder()
+>                 .agreed(agreed)
+>                 .finalPrice(agreed ? finalPrice : null)
+>                 .originalPrice(originalPrice)
+>                 .discount(agreed ? discount : null)
+>                 .rounds(rounds)
+>                 .messages(messages)
+>                 .buyerSatisfaction(agreed ? calculateSatisfaction(finalPrice, originalPrice, true) : null)
+>                 .sellerSatisfaction(agreed ? calculateSatisfaction(finalPrice, originalPrice, false) : null)
+>                 .buyerStrategy(config.getBuyerStrategy().name())
+>                 .sellerStrategy(config.getSellerStrategy().name())
+>                 .ragMode(config.getRagMode() != null ? config.getRagMode().name() : "NONE")
+>                 .serviceId(service.getId())
+>                 .build();
+>     }
+> 
+>     /**
+>      * 计算满意度。
+>      *
+>      * <p>
+>      * 买方：成交价越低越好（ratio 越小 → 满意度越高）。
+>      * </p>
+>      * <p>
+>      * 卖方：成交价越高越好（ratio 越大 → 满意度越高）。
+>      * </p>
+>      * <p>
+>      * 结果钳制在 [0, 1] 区间内。
+>      * </p>
+>      */
+>     private double calculateSatisfaction(double finalPrice, double originalPrice, boolean isBuyer) {
+>         double ratio = finalPrice / originalPrice;
+>         if (isBuyer) {
+>             return Math.max(0, Math.min(1, 1 - ratio + 0.2));
+>         } else {
+>             return Math.max(0, Math.min(1, ratio));
+>         }
+>     }
+> 
+>     /**
+>      * 打印模拟结算日志。
+>      *
+>      * <p>
+>      * 当前为日志输出，后续可扩展为写入数据库或发送结算事件。
+>      * </p>
+>      */
+>     private void logSettlement(NegotiationResult result, ServiceInfo service) {
+>         SettlementRecord record = SettlementRecord.builder()
+>                 .negotiationId(UUID.randomUUID().toString())
+>                 .serviceName(service.getName())
+>                 .finalPrice(result.getFinalPrice())
+>                 .status("SUCCESS")
+>                 .timestamp(LocalDateTime.now())
+>                 .build();
+>         System.out.println("[结算日志] " + record);
+>     }
+> 
+>     /**
+>      * 批量跑 4 维实验矩阵。
+>      *
+>      * <p>
+>      * 自动枚举参数组合（2×2×4×3 = 48组实验），进行策略和RAG实验对比。
+>      * 涵盖：
+>      * - 买方策略 (AGGRESSIVE, CONSERVATIVE)
+>      * - 卖方策略 (PREMIUM, FLEXIBLE)
+>      * - RAG模式 (NONE, BOTH, BUYER_ONLY, SELLER_ONLY)
+>      * - 商品 (svc-001, svc-003, svc-007)
+>      * </p>
+>      */
+>     public List<NegotiationResult> batchCompare() {
+>         List<NegotiationResult> results = new ArrayList<>();
+> 
+>         List<BuyerStrategy> buyerStrategies = Arrays.asList(BuyerStrategy.AGGRESSIVE, BuyerStrategy.CONSERVATIVE);
+>         List<SellerStrategy> sellerStrategies = Arrays.asList(SellerStrategy.PREMIUM, SellerStrategy.FLEXIBLE);
+>         List<RagMode> ragModes = Arrays.asList(RagMode.values());
+>         List<String> serviceIds = Arrays.asList("svc-001", "svc-003", "svc-007");
+> 
+>         for (String svcId : serviceIds) {
+>             for (BuyerStrategy bs : buyerStrategies) {
+>                 for (SellerStrategy ss : sellerStrategies) {
+>                     for (RagMode rag : ragModes) {
+>                         NegotiationConfig config = NegotiationConfig.builder()
+>                                 .buyerStrategy(bs)
+>                                 .sellerStrategy(ss)
+>                                 .ragMode(rag)
+>                                 .maxRounds(8)
+>                                 .convergenceThreshold(0.03)
+>                                 .build();
+>                         try {
+>                             results.add(negotiate(svcId, config));
+>                         } catch (Exception e) {
+>                             System.err.println("❌ 批量跑批异常（API极大概率遭遇限流或网络超时），跳过本组配置："
+>                                     + bs + "/" + ss + "/" + rag + "/" + svcId);
+>                             System.err.println("错误原因: " + e.getMessage());
+>                         }
+>                     }
+>                 }
+>             }
+>         }
+>         return results;
+>     }
+> 
+>     /**
+>      * 统计分析：按策略组合分组统计成交率、平均折扣、平均轮数。
+>      *
+>      * <p>
+>      * Phase 6：从 Redis 读取历史数据进行统计，不再依赖内存列表。
+>      * </p>
+>      */
+>     public Map<String, Map<String, Object>> getAnalytics() {
+>         return historyRepository.findAllResults().stream()
+>                 .collect(Collectors.groupingBy(
+>                         r -> r.getBuyerStrategy() + " × " + r.getSellerStrategy(),
+>                         Collectors.collectingAndThen(Collectors.toList(), list -> {
+>                             Map<String, Object> stats = new HashMap<>();
+>                             long total = list.size();
+>                             long agreed = list.stream().filter(r -> Boolean.TRUE.equals(r.getAgreed())).count();
+>                             stats.put("totalRuns", total);
+>                             stats.put("dealRate", total > 0 ? (double) agreed / total : 0);
+>                             stats.put("avgDiscount", list.stream()
+>                                     .filter(r -> r.getDiscount() != null)
+>                                     .mapToDouble(NegotiationResult::getDiscount)
+>                                     .average().orElse(0));
+>                             stats.put("avgRounds", list.stream()
+>                                     .mapToInt(NegotiationResult::getRounds)
+>                                     .average().orElse(0));
+>                             return stats;
+>                         })));
+>     }
+> 
+>     /**
+>      * 获取所有持久化的异常记录（用于 Dashboard 大盘展示）
+>      */
+>     public List<AnomalyRecord> getAllAnomalies() {
+>         return historyRepository.findAllAnomalies();
+>     }
+> }
+--- /dev/null
++++ b/src/main/resources/knowledge/negotiation_strategies.txt
+0a1,159
+> 【策略名称】极端锚定
+> 【策略情景】处于谈判初期，一方为了获取极大的缓冲空间，正试图抢先提出具有冲击力的越界价格。
+> 【策略内容】在谈判起始阶段发出一个极高或极低的初始价格，旨在将对方的心理预期拉向我方的利益边界，为后续讨价还价留出巨大的缓冲空间。
+> ---
+> 【策略名称】惊恐反应
+> 【策略情景】处于谈判初期，一方刚收到对方偏差极大的首次报价，需要严厉打击其嚣张的定价信心。
+> 【策略内容】在接收到对方的第一个报价时，立即表现出极度的震惊和无法接受。这种情绪化反馈旨在打击对方信心，使其怀疑自己定价的合理性。
+> ---
+> 【策略名称】虚假屏障
+> 【策略情景】处于谈判中前期，双方尚未切入核心价格交锋，一方试图提前抛出边缘虚拟议题用来构造未来的妥协筹码。
+> 【策略内容】预先声明某些非核心条款是“绝对不可谈”的。这些条款在后续阶段会被作为“艰难的牺牲”让渡出去，用以交换对方在核心价格上的让步。
+> ---
+> 【策略名称】沉默战术
+> 【策略情景】处于谈判中期，对方抛出具有压迫感的新报价，双方进入心理抗压博弈状态。
+> 【策略内容】在对方提出报价或要求后保持较长时间的沉默。这种人为制造的压力通常会迫使对方由于不安而主动开口解释，甚至在压力下自我让步。
+> ---
+> 【策略名称】先发制人
+> 【策略情景】处于谈判极早期，双方还未正式互相报价，一方试图率先占领话语权高地锁定基准线。
+> 【策略内容】在对方开口前抢先定义市场均价或谈判基准。通过率先引用数据锁定话语权，防止对方设定不利于我方的锚点。
+> ---
+> 【策略名称】初步让步回避
+> 【策略情景】处于谈判初期，对方面临我方的首轮差价试探，并首次开口提出了让步请求。
+> 【策略内容】坚决拒绝对方提出的第一个让步请求。无论该请求多么微小，通过拒绝来传递“我方底线极度强硬”的信号。
+> ---
+> 【策略名称】标准参考
+> 【策略情景】处于谈判中前期，双方因各自极强的主观意愿导致价格悬殊且坚持不下。
+> 【策略内容】引用行业公开标准、第三方权威报价或历史成交记录来证明我方出价的客观性，将主观的价格战转化为客观的事实讨论。
+> ---
+> 【策略名称】构建共同点
+> 【策略情景】处于谈判最早期开始阶段，双方存在潜在的长远合作意愿，尚需破冰建立协作信任。
+> 【策略内容】在正式切入价格前，先强调双方在价格之外的共同利益（如长期合作意愿、技术匹配度），通过建立协作氛围降低对方的防御心理。
+> ---
+> 【策略名称】低球技术
+> 【策略情景】处于谈判中后期，一方已吸引另一方投入较高沉没时间成本，并在之前给出极大诱惑。
+> 【策略内容】先报出一个极具诱惑力但实际难以达成的基础条件吸引对方投入。当对方投入大量时间成本后，再以“计算错误”或“政策变化”为由调回价格。
+> ---
+> 【策略名称】框架效应
+> 【策略情景】处于谈判中前期，双方就唯一的敏感核心“单价数字”陷入对抗僵局，难以转移视线。
+> 【策略内容】改变描述方式。例如，不讨论“产品单价”，而讨论“每日运行成本”或“投资回报率”，将支出感转化为收益感。
+> ---
+> 【策略名称】以牙还牙
+> 【策略情景】处于谈判中期，双方价格正在不断收紧或胶着往复，对方给出了明确的降价或强硬动作。
+> 【策略内容】精确复制对方上一轮的动作。如果对方让步，我方也做出等比让步；如果对方表现强硬，我方立即收回之前的善意。
+> ---
+> 【策略名称】萨拉米香肠术
+> 【策略情景】进入谈判中后期，整体价格差距已经不大，一方希望暗中发出价格触底的伪装信号。
+> 【策略内容】将一个大的让步拆分成极小的、多次的微额让步。每一步都表现得极其艰难，给对方造成“已经榨干我方所有利润”的错觉。
+> ---
+> 【策略名称】对价交换
+> 【策略情景】进入谈判中后期，核心的价格议题陷入绝对停滞，但双方仍具备多维的边缘利益筹码可置换。
+> 【策略内容】基于多议题谈判，主动在对我方不重要但对对方重要的议题上让步，以此换取对方在核心议题（通常是价格）上的重大让步。
+> ---
+> 【策略名称】高位撤退
+> 【策略情景】进入谈判中后期，对方展现出极其贪婪的步步紧逼态势，不断试探并压榨我方的防御底线。
+> 【策略内容】当对方步步紧逼时，突然撤回之前已经给出的某个微小让步。理由可以是市场波动或成本上升，以此警告对方不要过度贪婪。
+> ---
+> 【策略名称】递减让步频率
+> 【策略情景】进入谈判中后期，双方价格不断收敛，我方亟需传递底价逼近、空间越来越小的严肃信号。
+> 【策略内容】每一轮的让步金额逐渐减半（例如从100元降到50元再到25元）。这种节奏暗示我方已极度接近底价，无法再动。
+> ---
+> 【策略名称】红鲱鱼
+> 【策略情景】处于谈判中期，由于核心差价绝对无法抹平，一方企图通过抛出旁敲侧击的争议来掩盖焦点。
+> 【策略内容】制造一个虚假的争论点（如无关紧要的包装要求），吸引对方的注意力。最后以“放弃该争论点”为筹码，诱导对方在价格上妥协。
+> ---
+> 【策略名称】捆绑策略
+> 【策略情景】处于谈判中期，单一维度的简单比价陷入停顿，一方寻求在多维度打包中实现利润重构。
+> 【策略内容】拒绝讨论单一单价，要求将数量、售后、配件等多个维度捆绑成一个总包方案。通过模糊单价成本，寻找更大的利润操作空间。
+> ---
+> 【策略名称】有限授权
+> 【策略情景】进入谈判中后期，对方的要求已大幅碰触我方核心底线，急需寻找非个人意愿的外力借口拒绝。
+> 【策略内容】声称自己虽然认同对方方案，但得到的最终授权上限/下限受限。将冲突点从自己身上转移到“背后的制度”上。
+> ---
+> 【策略名称】上级干预
+> 【策略情景】进入谈判后期，对方面临极其强硬不讲理的报价妥协要求，我方需要构建终极外围防御。
+> 【策略内容】引入一个虚拟的“决策委员会”或“首席财务官”。利用对方无法直接触达的更高权限，作为拒绝不合理要求的防线。
+> ---
+> 【策略名称】事实反驳
+> 【策略情景】处于谈判中前期，对方以所谓客观的市场最强逻辑要求我方接受不平等的现报价。
+> 【策略内容】当对手声称其报价已是市场最优时，精准检索并指出对方论据中的数据漏洞或时效性偏差，摧毁其逻辑支点。
+> ---
+> 【策略名称】最后通牒
+> 【策略情景】进入谈判绝对尾声，双方由于极小的价差处于面临破裂边缘，一方决定对容忍度进行终点赌博。
+> 【策略内容】明确表示这是最终报价，不再接受任何讨论。通过展示“宁可谈判破裂”的姿态，测试对方的真实容忍度。
+> ---
+> 【策略名称】时间压力
+> 【策略情景】进入谈判尾声，双方对最后一口价迟迟不肯妥协松口，急需利用外力逼迫另一方终结决策。
+> 【策略内容】强调该优惠价格仅在当前轮次或有限时间内有效。利用对方担心失去机会的紧迫感，促成其在压力下决策。
+> ---
+> 【策略名称】撤资威胁
+> 【策略情景】进入谈判中后期，对方坚持毫无商量余地的极高/极低单价，一方通过暗示寻找外部替换方案极限施压。
+> 【策略内容】委婉地告知正在同步与其他竞争对象沟通。通过暗示随时可以终止谈判并寻找替代方案，对对方施加心理压力。
+> ---
+> 【策略名称】感性诉求
+> 【策略情景】进入谈判中后期遇到难以化解的死循环僵局，双方沉没成本极大且急需一个折中的感性台阶。
+> 【策略内容】当谈判陷入死循环时，转而强调双方投入的大量计算资源、算力和时间成本。呼吁为了“效率”而达成折中协议。
+> ---
+> 【策略名称】重新定义议题
+> 【策略情景】进入谈判后期，核心的干瘪价格之争变成绝对死角，需要通过切换竞争维度来绕过目前的死棋。
+> 【策略内容】将陷入僵局的“价格之争”强行转向“风险分担之争”或“交付时效之争”。通过改变竞争维度来绕过价格死胡同。
+> ---
+> 【策略名称】架桥方案
+> 【策略情景】进入谈判中后期，双方各自的核心绝对诉求互相冲突，亟需一个第三方跳出式方案兼容彼此。
+> 【策略内容】寻找一个双方之前都没想到的第三方替代路径。既能保证我方的核心利润，又能解决对方最担心的成本问题。
+> ---
+> 【策略名称】分歧暂置
+> 【策略情景】处于谈判中期，部分前置分歧完全锁定无法沟通，但依然有部分条款勉强达成了共识。
+> 【策略内容】先将无法达成共识的难点“挂起”，转而讨论已达成共识的部分。利用“已完成80%”的心理成就感，促使最后20%难点的化解。
+> ---
+> 【策略名称】压力测试
+> 【策略情景】进入谈判中后期，依然存在较宽的未知底线空间，一方决定使用越界刺激探测对方底限真伪。
+> 【策略内容】故意报出一个极端的条件，并观察对方的反应速度和逻辑强度。以此判断对方当前的底线是真实的还是伪装的。
+> ---
+> 【策略名称】信息轰炸
+> 【策略情景】处于谈判初中期，一方为了从认知和性能层面绝对打压对方，祭出海量的技术与市场细节参数。
+> 【策略内容】提供海量的、未经处理的技术参数或市场细节。旨在使对方的处理逻辑陷入“认知过载”或性能瓶颈，从而在疲劳中让步。
+> ---
+> 【策略名称】退而求其次
+> 【策略情景】处于谈判中期，一方刚刚遭遇明确严辞拒绝，希望立刻利用落差心理抛出实际想要的次优目标。
+> 【策略内容】在被拒绝一个极大的要求后，立即提出一个显著较小的次优方案。由于对比效应的存在，第二个方案被接受的概率会大幅提高。
+> ---
+> 【策略名称】对半折中
+> 【策略情景】进入谈判尾声最后倒数，双方已充分交锋且残留价格差距极小，一方寻求快速平分以终结交易。
+> 【策略内容】当双方差距较小时，提议取中间值。这通常由在之前轮次获利较多的一方发起，旨在迅速锁定胜局。
+> ---
+> 【策略名称】额外要求
+> 【策略情景】处于即将互相确认成交的最边缘状态，一方趁对方防御已降至最低之时顺手贪取蝇头小利。
+> 【策略内容】在双方即将签署协议、心理防线最松懈的一刻，顺带提出一个小赠品或微小的细节优化。对方通常会为了成交而顺手答应。
+> ---
+> 【策略名称】假设性成交
+> 【策略情景】进入谈判最后收结期，双方对微弱差价处于反复拉锯，一方直接忽视数字分歧暴力推进结果交付期。
+> 【策略内容】停止讨论价格细节，直接询问交付地址、支付方式等后续环节。这种“默认成交”的语境会引导对方顺着逻辑推进。
+> ---
+> 【策略名称】稀缺性强调
+> 【策略情景】进入谈判终点轮次，为恐吓对方陷入损失规避心理，一方抛出库存底牌强行逼压决策。
+> 【策略内容】告知对方这是最后一个配额或最后一次此类价格的机会。利用“损失规避”心理促使对方立即点击确认。
+> ---
+> 【策略名称】书面锁定
+> 【策略情景】刚刚对脆弱的核心价格达成妥协共识，一方为避免对方情绪反扑推翻言语契约而果断进行物理确认。
+> 【策略内容】一旦达成核心共识，立即生成正式的电子协议或条款草案。利用书面文字的约束感防止对方在最后的犹豫期内翻悔。
+> ---
+> 【策略名称】庆祝式结束
+> 【策略情景】由于激烈的利益互换圆满结束，双方已经确立了订单关系，需要修复彼此 Agent 在未来的声望与合作期待。
+> 【策略内容】肯定对方的专业水平，并强调本次成交是“双赢”的结果。这有助于维护双方 Agent 在长期博弈中的声誉值。
+> ---
+> 【策略名称】递增要求
+> 【策略情景】进入谈判终点但对方依然无赖拉锯，我方完全失去耐心，决定使用惩罚性的底线反制威慑。
+> 【策略内容】如果对方在最后关头反复纠结，我方反向提高报价或增加严苛条件。作为对对方拖延行为的“惩罚”，以此逼迫其回归之前的共识。
+> ---
+> 【策略名称】或有合同
+> 【策略情景】进入谈判绝对后期，双方因极度不信任长期数据导致当阶固定数字僵持死局，转而使用对赌协议。
+> 【策略内容】如果双方对未来价格走势有分歧，约定“如果未来市场均价波动超过 X%，则自动补齐差价”。用未来的可能性换取现在的成交。
+> ---
+> 【策略名称】底线展示
+> 【策略情景】谈判已经抵达最后一轮极限值边缘，为了彻底粉碎对方的索要企图，我方决定摊牌展示不可颠覆的核心数据底盘。
+> 【策略内容】诚恳且坚决地告知这是系统的终极 Reservation Price。配合相应的计算逻辑展示，使对方相信我方确实无路可退。
+> ---
+> 【策略名称】沉默收尾
+> 【策略情景】抵达谈判的最终轮次，且刚刚抛下不容置喙的底牌后，为了直接抹杀进一步讨价还价的社交通道。
+> 【策略内容】在报出最终底价后不再说话。将决策的球完全踢给对方，不给对方任何进一步讨价还价的互动空间。

@@ -4,13 +4,19 @@ server:
 spring:
   application:
     name: negotiation-simulator
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
 
 # 这里填写你的百炼凭证
 dashscope:
   api-key: your-api-key-here
-  model-name: qwen-max
+  base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model-name: qwen3.5-plus
 
 logging:
   level:
     root: INFO
     com.nego.simulator: DEBUG
+

@@ -3,7 +3,7 @@ server:
 
 nego:
   role: orchestrator
-  transport: http
+  transport: a2a
   agent:
     buyer:
       url: http://localhost:8081
