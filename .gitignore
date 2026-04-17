@@ -27,3 +27,9 @@ step_by_step_guide_simp.md
 src/main/resources/application.yml
 opentelemetry-javaagent.jar
 logs/
+
+# Dev plans and diffs
+*.diff
+*.patch
+DEVELOPMENT_PLAN.md
+phase1-workplan.md
