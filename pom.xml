@@ -56,6 +56,12 @@
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-dashscope</artifactId>
             <version>0.36.2</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-simple</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
@@ -134,6 +140,13 @@
             <groupId>io.opentelemetry.instrumentation</groupId>
             <artifactId>opentelemetry-spring-boot-starter</artifactId>
             <version>2.10.0</version>
+        </dependency>
+
+        <!-- Netty DNS Macos -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-resolver-dns-native-macos</artifactId>
+            <classifier>osx-aarch_64</classifier>
         </dependency>
 
 

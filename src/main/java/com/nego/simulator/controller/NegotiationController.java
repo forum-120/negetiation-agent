@@ -2,6 +2,7 @@ package com.nego.simulator.controller;
 
 
 import com.nego.simulator.model.*;
+import com.nego.simulator.model.NegotiateProtocol;
 import com.nego.simulator.service.NegotiationService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
@@ -45,13 +46,15 @@ public class NegotiationController {
                 .buyerStrategy(request.buyerStrategy)
                 .sellerStrategy(request.sellerStrategy)
                 .ragMode(request.ragMode != null ? request.ragMode : RagMode.NONE)
+                .protocol(request.protocol != null
+                        ? NegotiateProtocol.valueOf(request.protocol.toUpperCase())
+                        : NegotiateProtocol.ITERATIVE_BARGAIN)
                 .maxRounds(request.maxRounds)
                 .convergenceThreshold(request.convergenceThreshold)
                 .build();
 
         NegotiationResult result = negotiationService.negotiate(request.serviceId, config);
 
-        //成交返回200，未成交返回402
         if(Boolean.TRUE.equals(result.getAgreed())) {
             return ResponseEntity.ok()
                     .header("X-Payment-Status", "agreed")
@@ -63,12 +66,10 @@ public class NegotiationController {
         }
     }
 
-    /**
-     * 批量跑 48 组 4 维策略/RAG组合
-     */
-    @PostMapping("/negotiate/batch")
-    public List<NegotiationResult> batchCompare() {
-        return negotiationService.batchCompare();
+    @PostMapping("/batch/{protocol}")
+    public List<NegotiationResult> batchByProtocol(@PathVariable String protocol) {
+        NegotiateProtocol proto = NegotiateProtocol.valueOf(protocol.toUpperCase());
+        return negotiationService.batchByProtocol(proto);
     }
 
     //获取历史记录
@@ -104,11 +105,8 @@ public class NegotiationController {
         public SellerStrategy sellerStrategy;
         public RagMode ragMode;
         public Integer maxRounds;
-        // 使用 Double（装箱类型）而非 double（基本类型）：
-        // 当 JSON 不传此字段时，Jackson 会将其反序列化为 null，
-        // NegotiationService 才能正确走默认值 0.03。
-        // 若用 double，不传时默认 0.0，收敛检查实际变成"价格完全相等才收敛"。
         public Double convergenceThreshold;
+        public String protocol;
     }
 
 

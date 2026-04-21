@@ -22,6 +22,9 @@ import java.util.List;
 @AllArgsConstructor
 public class OfferResponse {
 
+    /** 远端 agent 实际使用的 sessionId，可为空。 */
+    private String sessionId;
+
     /** LLM 回复的原始文本 */
     private String text;
 

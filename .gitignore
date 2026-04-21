@@ -33,3 +33,13 @@ logs/
 *.patch
 DEVELOPMENT_PLAN.md
 phase1-workplan.md
+
+# --- New Exclusions ---
+# Personal notes and study materials
+面试包装话术.md
+phase2_study.md
+phase3_study.md
+
+# Experiment data and results
+experiment/
+*.json

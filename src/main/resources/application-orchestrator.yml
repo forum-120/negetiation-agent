@@ -3,6 +3,8 @@ server:
 
 nego:
   role: orchestrator
+  rag:
+    bootstrap: false
   transport: a2a
   agent:
     buyer:

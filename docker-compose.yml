@@ -61,7 +61,7 @@ services:
     restart: on-failure
 
   redis:
-    image: redis:7-alpine
+    image: registry.cn-hangzhou.aliyuncs.com/xfg-studio/redis:6.2
     ports: ["6379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

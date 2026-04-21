@@ -72,6 +72,7 @@ public class BuyerAgentExecutor implements AgentExecutor {
         AgentCallResponse callResp = buyerService.call(callReq);
 
         OfferResponse offer = OfferResponse.builder()
+                .sessionId(callResp.getSessionId())
                 .text(callResp.getResponse())
                 .lastOffer(callResp.getLastOffer())
                 .accepted(callResp.isAccepted())

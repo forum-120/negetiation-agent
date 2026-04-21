@@ -72,6 +72,7 @@ public class HttpTransport implements AgentTransport {
         }
 
         return CompletableFuture.completedFuture(OfferResponse.builder()
+                .sessionId(body.getSessionId())
                 .text(body.getResponse())
                 .lastOffer(body.getLastOffer())
                 .accepted(body.isAccepted())
@@ -95,6 +96,7 @@ public class HttpTransport implements AgentTransport {
         }
 
         return CompletableFuture.completedFuture(OfferResponse.builder()
+                .sessionId(body.getSessionId())
                 .text(body.getResponse())
                 .lastOffer(body.getLastOffer())
                 .accepted(body.isAccepted())

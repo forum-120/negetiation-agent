@@ -47,6 +47,7 @@ public class BuyerAgentService {
         session.tools.setOpponentLastOffer(request.getOpponentLastOffer());
         String response = session.agent.negotiate(request.getContext());
         return AgentCallResponse.builder()
+                .sessionId(request.getSessionId())
                 .response(response)
                 .lastOffer(session.tools.getLastOffer())
                 .accepted(session.tools.isAccepted())

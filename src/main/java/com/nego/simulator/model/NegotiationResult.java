@@ -150,11 +150,14 @@ public class NegotiationResult {
      */
     private String serviceId;
 
-    /**
-     * 异常行为监控记录
-     * 
-     * 记录本次谈判过程中出现的策略越界，僵局或者超额支付等行为
-     */
     @Builder.Default
     private List<AnomalyRecord> anomalyRecords = new ArrayList<>();
+
+    private Double nashWelfare;
+    private String protocol;
+    private String negotiationId;
+    private Integer trialIndex;
+    private Integer maxRounds;
+    private Double convergenceThreshold;
+    private String startedAt;
 }
